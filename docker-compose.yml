@@ -1,0 +1,132 @@
+services:
+
+  # ── Dashboard (CyberHawk-branded React SPA) ──────────────────────────────────
+  etherhawk-ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    container_name: etherhawk-ui
+    restart: unless-stopped
+    ports:
+      - "${UI_PORT:-8080}:80"          # dashboard — put behind VPN/tunnel; token-guarded
+    depends_on:
+      etherhawk-api:
+        condition: service_healthy
+    networks:
+      - etherhawk-net
+
+  # ── Orchestrator API (deterministic pipeline, verdict engine, SQLite) ─────────
+  etherhawk-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: etherhawk-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${API_PORT:-8094}:8000"   # localhost only; the UI proxies /api
+    env_file:
+      - .env
+    environment:
+      - WORKSPACE=/workspace
+      - MITM_PROXY=${MITM_PROXY:-http://etherhawk-proxy:8095}
+      - MITM_FLOWS_PATH=${MITM_FLOWS_PATH:-/workspace/_mitm/flows.jsonl}
+      - BROWSER_URL=${BROWSER_URL:-http://etherhawk-browser:9001}
+      - DEOBFUSCATOR_URL=${DEOBFUSCATOR_URL:-http://etherhawk-deobf:3020/deobfuscate}
+      - SANDBOX_URL=${SANDBOX_URL:-http://etherhawk-sandbox:3021/run}
+    volumes:
+      - etherhawk-data:/workspace
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health',timeout=5).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - etherhawk-net          # egress + reach proxy/deobf/ui
+      - etherhawk-browser-net  # reach the browser worker
+      - etherhawk-internal     # reach the sandbox (no-egress net)
+
+  # ── MITM proxy: captures every request + SSRF-blocks internal targets ─────────
+  etherhawk-proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    container_name: etherhawk-proxy
+    restart: unless-stopped
+    # No host port: mitmweb is reachable only inside the compose network. The
+    # dashboard renders flows natively (auth-guarded) instead of exposing mitmweb.
+    environment:
+      - MITM_FLOWS_PATH=${MITM_FLOWS_PATH:-/workspace/_mitm/flows.jsonl}
+      - UPSTREAM_PROXY=${UPSTREAM_PROXY:-}
+      - ALLOW_PRIVATE_TARGETS=${ALLOW_PRIVATE_TARGETS:-false}
+    volumes:
+      - etherhawk-data:/workspace
+    networks:
+      - etherhawk-net          # the only egress path to the internet (host public IP)
+      - etherhawk-browser-net  # receives traffic from the browser worker
+
+  # ── Stealth browser worker (full Chromium, coherent laptop fingerprint) ───────
+  etherhawk-browser:
+    build:
+      context: ./browser
+      dockerfile: Dockerfile
+    container_name: etherhawk-browser
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - WORKSPACE=/workspace
+      - MITM_PROXY=${MITM_PROXY:-http://etherhawk-proxy:8095}
+    volumes:
+      - etherhawk-data:/workspace
+    shm_size: "1gb"
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      # internal: the browser has NO direct internet route. All egress MUST go via
+      # etherhawk-proxy, which SSRF-blocks internal/metadata targets. A renderer
+      # exploit from a visited page therefore cannot reach the host LAN or the internet.
+      - etherhawk-browser-net
+
+  # ── Deobfuscator (JS/PS beautify + IOC extraction) ────────────────────────────
+  etherhawk-deobf:
+    build:
+      context: ./deobfuscator
+      dockerfile: Dockerfile
+    container_name: etherhawk-deobf
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - etherhawk-net
+
+  # ── Isolated JS sandbox (NO network egress — internal net only) ───────────────
+  etherhawk-sandbox:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    container_name: etherhawk-sandbox
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,noexec
+    networks:
+      - etherhawk-internal     # internal:true → cannot reach the internet
+
+volumes:
+  etherhawk-data:
+    driver: local
+
+networks:
+  etherhawk-net:
+    driver: bridge             # has NAT egress via the host's public (residential) IP
+  etherhawk-browser-net:
+    driver: bridge
+    internal: true             # browser ↔ proxy/api only; no direct outbound
+  etherhawk-internal:
+    driver: bridge
+    internal: true             # sandbox cannot exfiltrate

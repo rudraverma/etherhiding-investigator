@@ -1,0 +1,35 @@
+# Secrets & runtime config
+.env
+*.env
+!.env.example
+
+# Appliance runtime data (cases, evidence, mitm flows, sqlite db)
+workspace/
+data/
+*.sqlite
+*.sqlite3
+*.db
+
+# Node
+node_modules/
+ui/dist/
+npm-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Playwright / browser
+ms-playwright/
+.cache/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.log

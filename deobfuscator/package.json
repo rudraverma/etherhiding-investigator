@@ -1,0 +1,11 @@
+{
+  "name": "etherhawk-deobf",
+  "version": "1.0.0",
+  "private": true,
+  "description": "EtherHawk deobfuscator — beautify + IOC extraction (no execution)",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "js-beautify": "1.15.1"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "etherhawk-sandbox",
+  "version": "1.0.0",
+  "private": true,
+  "description": "EtherHawk isolated JS execution sandbox (no dependencies; container is the boundary)",
+  "main": "runner.js",
+  "scripts": { "start": "node runner.js" }
+}
