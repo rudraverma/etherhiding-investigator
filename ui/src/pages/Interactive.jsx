@@ -1,6 +1,6 @@
 ﻿import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Crosshair, Activity } from 'lucide-react';
+import { Crosshair, Activity, Network } from 'lucide-react';
 import { C, HudFrame, ExecButton, IndicatorBadge } from '../components/CyberHawkUI.jsx';
 import { api } from '../api.js';
 
@@ -13,9 +13,35 @@ export default function Interactive() {
   const [busy, setBusy] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [err, setErr] = useState('');
+  const [flows, setFlows] = useState([]);
+  const [flowsErr, setFlowsErr] = useState('');
   const timer = useRef(null);
+  const flowTimer = useRef(null);
 
-  useEffect(() => () => timer.current && clearTimeout(timer.current), []);
+  useEffect(() => () => {
+    timer.current && clearTimeout(timer.current);
+    flowTimer.current && clearTimeout(flowTimer.current);
+  }, []);
+
+  // Start live flow polling when a session is active.
+  useEffect(() => {
+    if (!caseId) return;
+    let active = true;
+    const pollFlows = async () => {
+      try {
+        const r = await api.mitmFlows(caseId);
+        if (active) setFlows(r.flows || []);
+      } catch (e) {
+        if (active) setFlowsErr(String(e.message || e));
+      }
+      if (active) flowTimer.current = setTimeout(pollFlows, 3000);
+    };
+    pollFlows();
+    return () => {
+      active = false;
+      flowTimer.current && clearTimeout(flowTimer.current);
+    };
+  }, [caseId]);
 
   // noVNC is proxied through nginx at /novnc/ — no SSL cert needed.
   // Pass VNC password and autoconnect so kasmweb connects immediately without a login prompt.
@@ -23,7 +49,7 @@ export default function Interactive() {
 
   const start = async () => {
     if (!url.trim()) return;
-    setBusy(true); setErr(''); setLive(null);
+    setBusy(true); setErr(''); setLive(null); setFlows([]); setFlowsErr('');
     try {
       const r = await api.interactiveStart(url.trim(), name.trim());
       setCaseId(r.case_id);
@@ -40,6 +66,7 @@ export default function Interactive() {
   const finalize = async () => {
     if (!caseId) return;
     setFinalizing(true); setErr('');
+    flowTimer.current && clearTimeout(flowTimer.current);
     try {
       await api.interactiveFinalize(caseId);
       nav(`/live?id=${encodeURIComponent(caseId)}`);
@@ -88,6 +115,53 @@ export default function Interactive() {
           <div style={{ marginTop: '0.9rem' }}>
             <ExecButton onClick={finalize} loading={finalizing} label="ANALYZE & GENERATE REPORT" loadingLabel="ANALYZING..." icon={Activity} color={C.red} />
           </div>
+        </HudFrame>
+      )}
+
+      {/* Live MITM flows — visible while the session is active, polling every 3 s */}
+      {caseId && (
+        <HudFrame title="Live Network Flows" subtitle={`${flows.length} flows captured`} accentColor={C.green} icon={Network}>
+          {flowsErr && <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.68rem', color: C.red, marginBottom: '0.5rem' }}>{flowsErr}</div>}
+          {flows.length === 0 ? (
+            <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.68rem', color: '#446644' }}>
+              Waiting for network traffic...
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: '260px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: "'Share Tech Mono', monospace", fontSize: '0.65rem' }}>
+                <thead>
+                  <tr>
+                    {['time','method','host','path','status','flags'].map(h => (
+                      <th key={h} style={{ textAlign: 'left', padding: '0.25rem 0.4rem', color: '#557755', borderBottom: `1px solid ${C.border}`, whiteSpace: 'nowrap' }}>{h.toUpperCase()}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...flows].reverse().map((f, i) => {
+                    const isRpc = f.is_blockchain_rpc;
+                    const isC2  = f.is_jsonp_c2 || f.is_jsrepo;
+                    const rowCol = isRpc ? C.red : isC2 ? C.gold : C.green;
+                    const ts = f.ts ? f.ts.slice(11, 19) : '';
+                    const path = (f.path || '/').slice(0, 40);
+                    return (
+                      <tr key={i} style={{ borderBottom: `1px solid #112211`, background: isRpc ? '#1a0000' : isC2 ? '#1a1000' : 'transparent' }}>
+                        <td style={{ padding: '0.2rem 0.4rem', color: '#557755', whiteSpace: 'nowrap' }}>{ts}</td>
+                        <td style={{ padding: '0.2rem 0.4rem', color: rowCol }}>{f.method || 'GET'}</td>
+                        <td style={{ padding: '0.2rem 0.4rem', color: rowCol, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.host || ''}</td>
+                        <td style={{ padding: '0.2rem 0.4rem', color: '#88aa88', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.path}>{path}</td>
+                        <td style={{ padding: '0.2rem 0.4rem', color: f.status >= 400 ? C.red : rowCol }}>{f.status || ''}</td>
+                        <td style={{ padding: '0.2rem 0.4rem', whiteSpace: 'nowrap' }}>
+                          {isRpc && <span style={{ color: C.red, marginRight: 4 }}>CHAIN</span>}
+                          {f.is_jsonp_c2 && <span style={{ color: C.gold, marginRight: 4 }}>C2</span>}
+                          {f.is_jsrepo && <span style={{ color: C.gold, marginRight: 4 }}>JSREPO</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </HudFrame>
       )}
 
