@@ -40,8 +40,23 @@ def new_case_path(domain: str, case_name: str, when: datetime | None = None) -> 
 
 
 def ensure_layout(case_path: Path) -> None:
+    # The interactive browser container writes some artifacts as a different uid
+    # (kasm-user) than the API (etherhawk). Make case dirs group/other writable so
+    # both can write into the shared volume. This is an isolated single-tenant
+    # appliance; the volume is not shared outside it.
+    import os
+    case_path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(case_path, 0o777)
+    except OSError:
+        pass
     for sd in SUBDIRS:
-        (case_path / sd).mkdir(parents=True, exist_ok=True)
+        d = case_path / sd
+        d.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(d, 0o777)
+        except OSError:
+            pass
 
 
 def case_path_from_id(case_id: str) -> Path | None:

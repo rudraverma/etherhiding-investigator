@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 
-from app.config import MITM_PROXY
+from app.ssrf import is_safe_url
 from app.pipeline.verdict import payload_is_deaddrop
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -25,6 +25,17 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # Common getter selectors seen across EtherHiding variants (fallback only;
 # the real selector is almost always captured from the page's own call).
 FALLBACK_SELECTORS = ["0x6d4ce63c", "0x2e64cec1", "0x893d20e8", "0xd46300fd"]
+
+# Public RPC endpoints to try when the contract was captured in-page (eval/atob)
+# without the network endpoint. BSC testnet is the most common EtherHiding host.
+FALLBACK_RPCS = [
+    "https://bsc-testnet-rpc.publicnode.com",
+    "https://bsc-dataseed.bnbchain.org",
+    "https://eth.llamarpc.com",
+    "https://base.publicnode.com",
+    "https://polygon-rpc.com",
+    "https://ethereum-sepolia-rpc.publicnode.com",
+]
 
 
 def abi_decode_string(hex_result: str) -> str:
@@ -71,9 +82,11 @@ def extract_c2_urls(js: str) -> list[str]:
 
 
 async def _rpc_call(rpc_url: str, contract: str, selector: str) -> dict:
+    if not is_safe_url(rpc_url):
+        raise ValueError("RPC URL blocked by SSRF guard")
     payload = {"jsonrpc": "2.0", "method": "eth_call",
                "params": [{"to": contract, "data": selector}, "latest"], "id": 1}
-    async with httpx.AsyncClient(timeout=20, proxy=MITM_PROXY, verify=False) as c:
+    async with httpx.AsyncClient(timeout=20, verify=False) as c:
         r = await c.post(rpc_url, json=payload, headers={"Content-Type": "application/json", "User-Agent": UA})
         return r.json()
 
@@ -89,46 +102,54 @@ async def replay_and_decode(contract: str, rpc_url: str, selector: str,
     selectors = [selector] if selector else []
     selectors += [s for s in FALLBACK_SELECTORS if s != selector]
 
-    for sel in selectors:
-        if not rpc_url or not contract:
-            break
-        try:
-            resp = await _rpc_call(rpc_url, contract, sel)
-        except Exception as e:
-            log(f"RPC replay error ({sel}): {e}", "warn")
-            continue
-        (bc / "blockchain_rpc_response.json").write_text(json.dumps(resp, indent=2))
-        hexres = (resp or {}).get("result", "")
-        if not hexres or hexres in ("0x", "0x0"):
-            continue
-        result["raw_result"] = hexres
-        result["selector"] = sel
-        try:
-            decoded = abi_decode_string(hexres)
-            payload = maybe_b64(decoded)
-            result["payload_js"] = payload
-            (bc / "blockchain_decoded_payload.js").write_text(payload, errors="replace")
-            result["c2_urls"] = extract_c2_urls(payload)
-            if result["c2_urls"]:
-                (bc / "c2_urls_extracted.json").write_text(
-                    json.dumps({"c2_urls": result["c2_urls"]}, indent=2))
-            # VERIFIED only if the decoded payload is an actual dead drop (C2 URLs or
-            # an executable loader) — not merely because it ABI-decoded to some string.
-            # This is what distinguishes an EtherHiding contract from a legit dApp contract.
-            if payload_is_deaddrop(payload, result["c2_urls"]):
-                result["verified"] = True
-                result["selector"] = sel
-                log(f"Blockchain DEAD DROP VERIFIED: loader payload {len(payload)} chars, "
-                    f"{len(result['c2_urls'])} C2 URL(s)", "critical")
-                break
-            else:
-                log(f"Contract returned {len(payload)} chars but it is not a loader/dead drop "
-                    f"(no C2 URLs, no executable loader) — not EtherHiding verification.", "warn")
-                continue
-        except Exception as e:
-            log(f"ABI decode failed ({sel}): {e}", "warn")
-            continue
+    # Prefer the captured endpoint; fall back to public RPCs if only the contract
+    # is known (e.g. captured in-page via eval/atob with no network endpoint).
+    rpc_candidates = [rpc_url] if rpc_url else list(FALLBACK_RPCS)
 
-    if not result["verified"]:
-        log("Blockchain replay returned no active payload (contract may be dormant).", "warn")
+    found_payload = False
+    done = False
+    for rpc in rpc_candidates:
+        if done:
+            break
+        for sel in selectors:
+            try:
+                resp = await _rpc_call(rpc, contract, sel)
+            except Exception as e:
+                log(f"RPC replay error ({rpc.split('//')[-1][:30]} {sel}): {e}", "warn")
+                continue
+            hexres = (resp or {}).get("result", "")
+            if not hexres or hexres in ("0x", "0x0"):
+                continue
+            # Got a non-empty return from this (rpc, selector) — this is our contract.
+            result["rpc_url"] = rpc
+            result["selector"] = sel
+            result["raw_result"] = hexres
+            found_payload = True
+            (bc / "blockchain_rpc_response.json").write_text(json.dumps(resp, indent=2))
+            try:
+                decoded = abi_decode_string(hexres)
+                payload = maybe_b64(decoded)
+                result["payload_js"] = payload
+                (bc / "blockchain_decoded_payload.js").write_text(payload, errors="replace")
+                result["c2_urls"] = extract_c2_urls(payload)
+                if result["c2_urls"]:
+                    (bc / "c2_urls_extracted.json").write_text(
+                        json.dumps({"c2_urls": result["c2_urls"]}, indent=2))
+                # VERIFIED only if the decoded payload is an executable loader — NOT
+                # merely a URL string (legit dApp getters return URLs). URL-only
+                # returns are corroborated later by fetching the C2 chain.
+                if payload_is_deaddrop(payload):
+                    result["verified"] = True
+                    log(f"Blockchain DEAD DROP VERIFIED: loader payload {len(payload)} chars, "
+                        f"{len(result['c2_urls'])} C2 URL(s)", "critical")
+                else:
+                    log(f"Contract returned {len(payload)} chars; not an executable loader. "
+                        f"C2 URLs ({len(result['c2_urls'])}) will be corroborated via fetch.", "warn")
+            except Exception as e:
+                log(f"ABI decode failed ({sel}): {e}", "warn")
+            done = True   # contract answered on this endpoint; stop probing others
+            break
+
+    if not found_payload:
+        log("Blockchain replay returned no active payload (contract dormant or wrong network).", "warn")
     return result

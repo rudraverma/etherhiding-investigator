@@ -15,8 +15,6 @@ import dns.resolver
 import httpx
 from bs4 import BeautifulSoup
 
-from app.config import MITM_PROXY
-
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
 
@@ -85,7 +83,7 @@ async def http_head(url: str, case_path: Path, log) -> dict:
     out: dict = {"status": None, "headers": {}, "redirects": [], "final_url": url}
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=20, verify=False,
-                                     proxy=MITM_PROXY, headers={"User-Agent": UA}) as client:
+                                     headers={"User-Agent": UA}) as client:
             resp = await client.get(url)
             out["status"] = resp.status_code
             out["final_url"] = str(resp.url)

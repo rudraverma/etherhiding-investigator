@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Routes, Route, NavLink, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { Search, List, Activity, Network, FileText, FolderTree, Settings as Cog, LogOut, Shield } from 'lucide-react';
+import { Search, MousePointerClick, List, Activity, Network, FileText, FolderTree, Settings as Cog, LogOut, Shield } from 'lucide-react';
 import { C, CYBER_STYLES, LOGO_URL, MatrixRain, GlitchText } from './components/CyberHawkUI.jsx';
 import { api, getToken, setToken, clearToken, AuthError } from './api.js';
 
 import SubmitUrl from './pages/SubmitUrl.jsx';
+import Interactive from './pages/Interactive.jsx';
 import Investigations from './pages/Investigations.jsx';
 import LiveInvestigation from './pages/LiveInvestigation.jsx';
 import MitmProxy from './pages/MitmProxy.jsx';
@@ -47,7 +48,8 @@ function Login({ onOk }) {
 }
 
 const NAV = [
-  { to: '/submit', label: 'Submit URL', icon: Search },
+  { to: '/interactive', label: 'Interactive', icon: MousePointerClick },
+  { to: '/submit', label: 'Submit (auto)', icon: Search },
   { to: '/cases', label: 'Investigations', icon: List },
   { to: '/settings', label: 'Settings', icon: Cog },
 ];
@@ -115,7 +117,8 @@ function Shell({ branding, onLogout }) {
         {/* Content */}
         <main style={{ flex: 1, minWidth: 0, padding: '1.25rem', overflow: 'auto' }}>
           <Routes>
-            <Route path="/" element={<Navigate to="/submit" replace />} />
+            <Route path="/" element={<Navigate to="/interactive" replace />} />
+            <Route path="/interactive" element={<Interactive />} />
             <Route path="/submit" element={<SubmitUrl />} />
             <Route path="/cases" element={<Investigations />} />
             <Route path="/live" element={<LiveInvestigation caseId={caseId} />} />
@@ -123,7 +126,7 @@ function Shell({ branding, onLogout }) {
             <Route path="/report" element={<Report caseId={caseId} />} />
             <Route path="/evidence" element={<Evidence caseId={caseId} />} />
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="*" element={<Navigate to="/submit" replace />} />
+            <Route path="*" element={<Navigate to="/interactive" replace />} />
           </Routes>
         </main>
       </div>

@@ -12,7 +12,8 @@ from pathlib import Path
 
 import httpx
 
-from app.config import MITM_PROXY, DEOBFUSCATOR_URL, SANDBOX_URL
+from app.config import DEOBFUSCATOR_URL, SANDBOX_URL
+from app.ssrf import is_safe_url
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
@@ -41,6 +42,26 @@ def _next_urls(code: str) -> list[str]:
             seen.add(u)
             out.append(u)
     return out
+
+
+async def _safe_fetch(url: str, max_hops: int = 5) -> str:
+    """Fetch following redirects MANUALLY, re-validating every hop against the SSRF
+    guard. httpx follow_redirects=True would bypass is_safe_url on 30x Location,
+    letting attacker-controlled C2 bounce us to internal/metadata hosts."""
+    cur = url
+    async with httpx.AsyncClient(timeout=25, follow_redirects=False, verify=False) as c:
+        for _ in range(max_hops):
+            if not is_safe_url(cur):
+                raise ValueError(f"redirect/host blocked by SSRF guard: {cur[:80]}")
+            resp = await c.get(cur, headers={"User-Agent": UA})
+            if resp.status_code in (301, 302, 303, 307, 308):
+                loc = resp.headers.get("location")
+                if not loc:
+                    return resp.text
+                cur = str(resp.url.join(loc))
+                continue
+            return resp.text
+    raise ValueError("too many redirects")
 
 
 async def _deobfuscate(code: str, label: str) -> dict:
@@ -81,11 +102,12 @@ async def follow_chain(c2_urls: list[str], case_path: Path, log) -> dict:
         if url in fetched:
             continue
         fetched.add(url)
+        if not is_safe_url(url):
+            log(f"C2 stage {stage} skipped (SSRF guard): {url[:60]}", "warn")
+            stage += 1
+            continue
         try:
-            async with httpx.AsyncClient(timeout=25, follow_redirects=True,
-                                         proxy=MITM_PROXY, verify=False) as c:
-                resp = await c.get(url, headers={"User-Agent": UA})
-                raw = resp.text
+            raw = await _safe_fetch(url)
         except Exception as e:
             log(f"C2 stage {stage} fetch failed ({url[:60]}): {e}", "warn")
             stage += 1

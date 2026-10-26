@@ -64,6 +64,7 @@ async def generate_api_key():
 # ── Branding (used by the UI header/footer) ──────────────────────────────────
 @router.get("/config")
 async def get_config():
+    import os
     raw = db.get_setting("branding")
     branding = dict(DEFAULT_BRANDING)
     if raw:
@@ -71,7 +72,10 @@ async def get_config():
             branding.update(json.loads(raw))
         except Exception:
             pass
-    return {"ok": True, "branding": branding}
+    # Port the interactive browser's noVNC view is published on (host side), so the
+    # dashboard can build the embed URL: https://<dashboard-host>:<kasm_port>/
+    kasm_port = os.getenv("KASM_PORT", "6901")
+    return {"ok": True, "branding": branding, "kasm_port": kasm_port}
 
 
 class BrandingBody(BaseModel):

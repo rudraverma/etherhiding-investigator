@@ -3,6 +3,15 @@
 > Standalone, **fully deterministic** EtherHiding detection appliance.
 > No AI/agent at runtime. CyberHawk-branded dashboard. Residential-IP egress.
 
+> **v2 (current):** re-architected to a **real Google Chrome driven over CDP (no TLS-terminating
+> proxy)** so the genuine TLS/JA3/HTTP2 fingerprint reaches the target. **Interactive mode** lets an
+> analyst drive the browser live via noVNC (kasmweb/chrome); **auto mode** drives the same browser
+> over CDP. Reason: v1's mitmproxy swapped the TLS fingerprint → cloaking sites served a 5xx decoy
+> (observed on ninassarts.com; ANY.RUN detonated it, v1 got HTTP 500). Retired `etherhawk-proxy` and
+> the Playwright `etherhawk-browser`; added an INCONCLUSIVE-on-cloaked/5xx fail-safe (never CLEAN).
+> Services now: etherhawk-ui, etherhawk-api, **etherhawk-interactive** (noVNC :6901 + CDP :9001),
+> etherhawk-deobf, etherhawk-sandbox.
+
 ## Mission
 
 Detect EtherHiding-compromised websites that use a **stage-1 fingerprint gate** to

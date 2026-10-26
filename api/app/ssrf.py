@@ -72,3 +72,13 @@ def validate_target(raw: str) -> dict:
             raise SSRFError(f"target resolves to a blocked/internal address: {ip}")
 
     return {"url": raw, "domain": host, "ips": ips}
+
+
+def is_safe_url(url: str) -> bool:
+    """Non-raising guard for secondary fetches (scripts, RPC, C2). Blocks
+    internal/reserved destinations unless the operator opted into private testing."""
+    try:
+        validate_target(url)
+        return True
+    except SSRFError:
+        return False

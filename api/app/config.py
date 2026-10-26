@@ -15,9 +15,11 @@ MITM_DIR = WORKSPACE / "_mitm"
 DB_PATH = WORKSPACE / "etherhawk.sqlite3"
 
 # Internal service URLs (compose defaults).
-MITM_PROXY = os.getenv("MITM_PROXY", "http://etherhawk-proxy:8095")
 MITM_FLOWS_PATH = Path(os.getenv("MITM_FLOWS_PATH", str(MITM_DIR / "flows.jsonl")))
-BROWSER_URL = os.getenv("BROWSER_URL", "http://etherhawk-browser:9001")
+# The interactive container (real Chrome + CDP capture) serves BOTH the auto-mode
+# /visit endpoint and the interactive /session endpoints.
+INTERACTIVE_URL = os.getenv("INTERACTIVE_URL", "http://etherhawk-interactive:9001")
+BROWSER_URL = os.getenv("BROWSER_URL", INTERACTIVE_URL)
 DEOBFUSCATOR_URL = os.getenv("DEOBFUSCATOR_URL", "http://etherhawk-deobf:3020/deobfuscate")
 SANDBOX_URL = os.getenv("SANDBOX_URL", "http://etherhawk-sandbox:3021/run")
 

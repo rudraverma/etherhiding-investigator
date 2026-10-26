@@ -40,7 +40,7 @@ def _logger(task_id: str):
 async def _background(task_id: str, url: str, domain: str, case_path: Path):
     log = _logger(task_id)
     try:
-        await orchestrator.run(task_id, url, domain, case_path, log)
+        await orchestrator.run_auto(task_id, url, domain, case_path, log)
         _tasks[task_id]["status"] = "done"
     except Exception as e:
         log(f"FATAL: {e}", "error")

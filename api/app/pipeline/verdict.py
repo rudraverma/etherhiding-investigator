@@ -46,11 +46,16 @@ def is_decisive(methods: list[str]) -> bool:
     return any(str(m).lower() in DECISIVE_RPC_METHODS for m in methods)
 
 
-def payload_is_deaddrop(payload_js: str, c2_urls: list) -> bool:
-    """A contract return value is a dead drop only if it yields C2 URLs or an
-    executable loader — not merely because it ABI-decoded to some string."""
-    if c2_urls:
-        return True
+def payload_is_deaddrop(payload_js: str, c2_urls: list | None = None) -> bool:
+    """A contract return value is a dead drop ONLY if it is an executable loader
+    (eval / new Function / script-tag injection / the base64 `var n=[...]` array).
+
+    A bare URL string is NOT sufficient: legitimate dApp/NFT getters such as
+    contractURI(), tokenURI(), baseURI() return https URLs on-chain and take no
+    args, so a 4-byte getter replay hits them cleanly. Treating "returned a URL"
+    as a dead drop would flag those as COMPROMISED — the exact false positive we
+    forbid. URL-only returns are corroborated separately by fetching the C2 chain
+    (see orchestrator.finalize_core); on their own they are at most SUSPECTED."""
     return bool(payload_js) and bool(LOADER_SIG_RE.search(payload_js))
 
 

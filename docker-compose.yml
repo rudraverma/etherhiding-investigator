@@ -28,11 +28,11 @@ services:
       - .env
     environment:
       - WORKSPACE=/workspace
-      - MITM_PROXY=${MITM_PROXY:-http://etherhawk-proxy:8095}
       - MITM_FLOWS_PATH=${MITM_FLOWS_PATH:-/workspace/_mitm/flows.jsonl}
-      - BROWSER_URL=${BROWSER_URL:-http://etherhawk-browser:9001}
+      - INTERACTIVE_URL=${INTERACTIVE_URL:-http://etherhawk-interactive:9001}
       - DEOBFUSCATOR_URL=${DEOBFUSCATOR_URL:-http://etherhawk-deobf:3020/deobfuscate}
       - SANDBOX_URL=${SANDBOX_URL:-http://etherhawk-sandbox:3021/run}
+      - KASM_PORT=${KASM_PORT:-6901}
     volumes:
       - etherhawk-data:/workspace
     healthcheck:
@@ -42,51 +42,32 @@ services:
       retries: 3
       start_period: 15s
     networks:
-      - etherhawk-net          # egress + reach proxy/deobf/ui
-      - etherhawk-browser-net  # reach the browser worker
+      - etherhawk-net          # reach interactive browser + deobf + ui
       - etherhawk-internal     # reach the sandbox (no-egress net)
 
-  # ── MITM proxy: captures every request + SSRF-blocks internal targets ─────────
-  etherhawk-proxy:
+  # ── Interactive REAL Chrome (noVNC) + CDP capture ─────────────────────────────
+  # Analyst-drivable real Google Chrome. Keeps its genuine TLS fingerprint (no
+  # TLS-terminating proxy), which is what gets past server-side anti-analysis
+  # cloaking. Egresses via the host's residential public IP. Serves BOTH the
+  # auto-mode /visit endpoint and the interactive /session endpoints on :9001,
+  # and the noVNC desktop on :6901.
+  etherhawk-interactive:
     build:
-      context: ./proxy
+      context: ./interactive
       dockerfile: Dockerfile
-    container_name: etherhawk-proxy
+    container_name: etherhawk-interactive
     restart: unless-stopped
-    # No host port: mitmweb is reachable only inside the compose network. The
-    # dashboard renders flows natively (auth-guarded) instead of exposing mitmweb.
-    environment:
-      - MITM_FLOWS_PATH=${MITM_FLOWS_PATH:-/workspace/_mitm/flows.jsonl}
-      - UPSTREAM_PROXY=${UPSTREAM_PROXY:-}
-      - ALLOW_PRIVATE_TARGETS=${ALLOW_PRIVATE_TARGETS:-false}
-    volumes:
-      - etherhawk-data:/workspace
-    networks:
-      - etherhawk-net          # the only egress path to the internet (host public IP)
-      - etherhawk-browser-net  # receives traffic from the browser worker
-
-  # ── Stealth browser worker (full Chromium, coherent laptop fingerprint) ───────
-  etherhawk-browser:
-    build:
-      context: ./browser
-      dockerfile: Dockerfile
-    container_name: etherhawk-browser
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - WORKSPACE=/workspace
-      - MITM_PROXY=${MITM_PROXY:-http://etherhawk-proxy:8095}
-    volumes:
-      - etherhawk-data:/workspace
     shm_size: "1gb"
-    security_opt:
-      - no-new-privileges:true
+    environment:
+      - VNC_PW=${KASM_PASSWORD:-changeme-kasm}
+      - CDP_PORT=9222
+      - MITM_FLOWS_PATH=${MITM_FLOWS_PATH:-/workspace/_mitm/flows.jsonl}
+    ports:
+      - "${KASM_PORT:-6901}:6901"      # noVNC desktop (HTTPS, self-signed) — the analyst view
+    volumes:
+      - etherhawk-data:/workspace
     networks:
-      # internal: the browser has NO direct internet route. All egress MUST go via
-      # etherhawk-proxy, which SSRF-blocks internal/metadata targets. A renderer
-      # exploit from a visited page therefore cannot reach the host LAN or the internet.
-      - etherhawk-browser-net
+      - etherhawk-net                  # egress via host public IP + reachable by API
 
   # ── Deobfuscator (JS/PS beautify + IOC extraction) ────────────────────────────
   etherhawk-deobf:
@@ -124,9 +105,6 @@ volumes:
 networks:
   etherhawk-net:
     driver: bridge             # has NAT egress via the host's public (residential) IP
-  etherhawk-browser-net:
-    driver: bridge
-    internal: true             # browser ↔ proxy/api only; no direct outbound
   etherhawk-internal:
     driver: bridge
     internal: true             # sandbox cannot exfiltrate

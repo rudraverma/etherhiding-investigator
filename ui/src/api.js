@@ -38,6 +38,12 @@ export const api = {
     body: JSON.stringify({ url, case_name }),
   }),
   status: (id) => req(`/api/investigate/status?id=${encodeURIComponent(id)}`),
+  interactiveStart: (url, case_name) => req('/api/interactive/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, case_name }),
+  }),
+  interactiveStatus: (id) => req(`/api/interactive/status?id=${encodeURIComponent(id)}`),
+  interactiveFinalize: (id) => req(`/api/interactive/finalize?id=${encodeURIComponent(id)}`, { method: 'POST' }),
   cases: () => req('/api/cases'),
   case: (id) => req(`/api/case?id=${encodeURIComponent(id)}`),
   tree: (id) => req(`/api/case/tree?id=${encodeURIComponent(id)}`),

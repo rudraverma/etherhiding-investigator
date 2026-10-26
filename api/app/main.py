@@ -13,7 +13,7 @@ from fastapi import FastAPI
 
 from app import db
 from app.config import CASES_DIR, MITM_DIR
-from app.routers import health, investigate, cases, mitm, settings
+from app.routers import health, investigate, cases, mitm, settings, interactive
 
 log = logging.getLogger("etherhawk")
 
@@ -30,6 +30,7 @@ async def _startup():
 
 app.include_router(health.router)
 app.include_router(investigate.router)
+app.include_router(interactive.router)
 app.include_router(cases.router)
 app.include_router(mitm.router)
 app.include_router(settings.router)

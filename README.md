@@ -44,11 +44,15 @@ EtherHawk defeats this deterministically:
 | Gate check | EtherHawk's answer |
 |---|---|
 | Datacenter / proxy IP | Egresses via the **host's residential public IP** (your homelab/server). No DC proxy. |
-| Headless browser tells | Real **headful Chromium** under Xvfb; `navigator.webdriver` removed; real plugins. |
-| GPU = SwiftShader | WebGL vendor/renderer spoofed to a consistent NVIDIA/Intel/Apple GPU. |
-| Inconsistent fingerprint | One **coherent profile**: UA ↔ platform ↔ UA-CH ↔ WebGL ↔ hardware ↔ timezone all agree. |
-| No human gesture | Simulated mouse movement, scroll and a click before dwell. |
-| Still blocked | **Escalation ladder** (rotate profile + more interaction) + **static + on-chain** fallbacks. |
+| **TLS / HTTP2 fingerprint** | A **real Google Chrome** (kasmweb) is driven over CDP — **no TLS-terminating proxy** — so Chrome's genuine TLS/JA3/HTTP2 handshake reaches the server. This is the single biggest fix: an intercepting MITM proxy's TLS fingerprint gets you cloaked. |
+| Behavioral / human gate | **Interactive mode:** the analyst drives the real browser live (noVNC) — real cursor physics, clicks, CAPTCHA/QR, ClickFix — exactly like ANY.RUN. Auto mode simulates interaction for fast triage. |
+| GPU = SwiftShader | WebGL vendor/renderer spoofed to a consistent GPU via a CDP init script. |
+| `navigator.webdriver` | Removed via CDP init script. |
+| Still blocked / cloaked | Never reported "clean": a 5xx/decoy/blocked visit returns **`INCONCLUSIVE`**. Plus **static + on-chain** fallbacks when source is reachable. |
+
+**Two modes, one real browser:**
+- **Interactive** (primary for hardened targets) — you drive a real Chrome in the dashboard; capture runs live; hit *Analyze* when the chain fires.
+- **Auto** — unattended triage: the API drives the same browser over CDP (navigate + simulate + dwell).
 
 ---
 
@@ -75,14 +79,13 @@ EtherHawk defeats this deterministically:
 ```
                          ┌──────────────── Docker host (RESIDENTIAL public IP) ───────────────┐
   analyst browser ──►  etherhawk-ui (8080)  ──nginx /api──►  etherhawk-api (8094)              │
-                                                                │   deterministic pipeline     │
-                                                                │   SQLite · SSE · verdict     │
-                                     ┌──────────────────────────┼───────────────┐              │
-                                     ▼                          ▼               ▼              │
-                             etherhawk-browser          etherhawk-proxy   etherhawk-deobf       │
-                             (headful Chromium,    ◄──►  (mitmproxy +      (beautify + IOCs)     │
-                              coherent fingerprint)       mitmweb 8081)                          │
-                                     │                          │                               │
+       │   (noVNC view)                                         │  deterministic pipeline      │
+       │                                                        │  SQLite · SSE · verdict      │
+       └────────────► etherhawk-interactive (6901 noVNC) ◄──────┤                              │
+                      REAL Google Chrome + CDP capture (:9001)   │                              │
+                      genuine TLS fingerprint, no proxy          ▼               ▼              │
+                                     │                     etherhawk-deobf   (CDP capture       │
+                                     │                     (beautify+IOCs)    writes flows)     │
                                      └─── egress via host public IP ───► the internet ──────────┘
                                                                 ▲
                        etherhawk-sandbox (internal net, NO egress) ── unwraps runtime obfuscation
@@ -90,12 +93,15 @@ EtherHawk defeats this deterministically:
 
 | Service | Role |
 |---|---|
-| `etherhawk-ui` | React/nginx dashboard (CyberHawk brand kit), 6 tabs |
+| `etherhawk-ui` | React/nginx dashboard (CyberHawk brand kit): Interactive, Submit(auto), MITM, Report, Evidence, Settings |
 | `etherhawk-api` | Deterministic orchestrator, verdict engine, SQLite, SSE, MISP push |
-| `etherhawk-proxy` | mitmproxy addon — flags blockchain RPC / C2 / ClickFix; mitmweb live view |
-| `etherhawk-browser` | Playwright full Chromium, coherent laptop fingerprint, CDP hooks, escalation ladder |
+| `etherhawk-interactive` | **Real Google Chrome** (kasmweb/chrome, noVNC) + CDP capture service — genuine TLS fingerprint, analyst-drivable *and* API-drivable |
 | `etherhawk-deobf` | JS/PowerShell beautifier + IOC extractor (never executes) |
 | `etherhawk-sandbox` | Isolated Node runtime — **no network egress**, `cap_drop ALL`, read-only |
+
+> Capture is **browser-native over CDP** — no TLS-terminating proxy — so the target sees Chrome's
+> real TLS/HTTP2 fingerprint. Flows are tagged per-case (no cross-case contamination) and still
+> shown live in the MITM tab.
 
 ---
 
@@ -110,35 +116,42 @@ git clone https://github.com/rudraverma/etherhiding-investigator.git
 cd etherhiding-investigator
 
 cp .env.example .env
-# Generate a strong dashboard token and put it in .env:
-#   openssl rand -hex 32   → ETHERHAWK_DASHBOARD_TOKEN
-# (the appliance refuses all access while the token is unset or left at the placeholder)
+# Set these in .env:
+#   ETHERHAWK_DASHBOARD_TOKEN   openssl rand -hex 32   (appliance refuses access until set)
+#   KASM_PASSWORD               password for the interactive browser desktop (user: kasm_user)
 nano .env
 
-docker compose build
+docker compose build        # first build pulls kasmweb/chrome (~2 GB) — be patient
 docker compose up -d
 ```
 
 Open **http://&lt;host-ip&gt;:8080**, log in with `ETHERHAWK_DASHBOARD_TOKEN`, and finish
-configuration (MISP, egress, branding, API key) in the **Settings** tab.
+configuration (MISP, branding, API key) in the **Settings** tab.
 
-> The dashboard can trigger outbound visits to attacker infrastructure — never expose port 8080
-> to the public internet without the token, and ideally place it behind a VPN / Cloudflare Tunnel
-> / firewall. Bind only to your LAN.
+**First use of the Interactive tab:** the analyst browser is served on
+`https://<host-ip>:6901` with a self-signed certificate. Click *“open browser in new tab”*
+once to accept the cert (then it embeds in the dashboard), and log into the desktop with
+`kasm_user` / `KASM_PASSWORD`.
+
+> The dashboard and the noVNC desktop can both reach attacker infrastructure — never expose ports
+> 8080 or 6901 to the public internet. Put them behind a VPN / Cloudflare Tunnel / firewall and
+> bind only to your LAN.
 
 ---
 
 ## Usage
 
-1. **Submit URL** — paste a suspected-compromised site and launch.
-2. **Live** — watch the deterministic pipeline run (recon → visit → capture → verdict) over SSE.
-3. **MITM** — every HTTP/HTTPS/WS call the target makes, live; blockchain RPC rows highlighted.
-4. **Report** — verdict, confidence, contract, RPC endpoint, decoded C2/relay/payload chain,
-   ClickFix status, and classified IOCs.
-5. **Evidence** — the full case tree; view any artifact, including the captured page rendered in a
-   **sandboxed frame with scripts disabled**.
-6. **Settings** — the appliance control panel: MISP URL + key, egress/proxy, fingerprint/timeouts,
-   dashboard token, generated API key, branding.
+- **Interactive** (primary, for hardened/cloaking targets) — enter the URL, click *Open in browser*,
+  then **drive the real Chrome yourself** in the embedded noVNC view (move the mouse, click through
+  the CAPTCHA/QR, trigger the ClickFix lure). Live signals (blockchain RPC / contract / ClickFix)
+  update as the chain fires; click **Analyze** to decode and generate the report.
+- **Submit (auto)** — unattended triage: the API drives the same real browser over CDP and runs the
+  full pipeline (recon → visit → capture → verdict) with live SSE logs.
+- **MITM** — every HTTP/HTTPS/WS call the target makes, live (captured in-browser), blockchain RPC highlighted.
+- **Report** — verdict, confidence, contract, RPC endpoint, decoded C2/relay/payload chain, ClickFix, classified IOCs.
+- **Evidence** — the full case tree; view any artifact, including the captured page rendered in a
+  **sandboxed frame with scripts disabled**.
+- **Settings** — control panel: MISP URL + key, timeouts, dashboard token, generated API key, branding.
 
 ### What you get per case
 
@@ -191,7 +204,9 @@ RPC infra are added **without** `to_ids` (do not block), while relay/payload C2 
 
 ## Security model
 
-- **SSRF guard** on every submission (scheme allowlist; private/loopback/link-local/metadata blocked).
+- **SSRF guards:** the submitted URL is validated (scheme allowlist; private/loopback/link-local/
+  metadata blocked), and every *secondary* API fetch (external scripts, on-chain RPC replay, C2 chain)
+  is re-validated before the request. `ALLOW_PRIVATE_TARGETS=true` opts into internal testing.
 - **Untrusted JS executes only** in `etherhawk-sandbox`, which sits on an `internal: true` network
   with **no route to the internet**, `cap_drop: ALL`, `read_only`, `no-new-privileges`, non-root.
 - **Captured malware HTML is never auto-executed** — rendered only in a sandboxed `<iframe>` with
@@ -199,9 +214,9 @@ RPC infra are added **without** `to_ids` (do not block), while relay/payload C2 
 - **Token/API-key auth** (constant-time) on every route except `/api/health`; the default
   placeholder token never grants access; secrets never baked into images or returned in plaintext;
   parameterized SQL; path-traversal-safe artifact reads.
-- **Egress SSRF block:** all investigative traffic (browser + API fetches) routes through the proxy,
-  which refuses requests to private/loopback/link-local/reserved hosts and cloud metadata. The browser
-  container has **no direct internet route** — it can only reach the proxy.
+- **Interactive browser caveat:** the real Chrome needs direct egress (that's what preserves its TLS
+  fingerprint), so it is not behind an egress choke point. Keep the appliance on a network segment
+  that cannot reach host management / internal LAN, and never expose port 6901 publicly.
 
 See [`DESIGN.md`](DESIGN.md) for the full threat model and data flow.
 
