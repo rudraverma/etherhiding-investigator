@@ -1,0 +1,5 @@
+﻿# Force LF line endings for shell scripts (prevents CRLF issues in Linux containers)
+*.sh text eol=lf
+*.py text eol=lf
+proxy/addon.py text eol=lf
+browser/hooks.js text eol=lf

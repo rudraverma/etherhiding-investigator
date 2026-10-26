@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Crosshair, ExternalLink, Activity } from 'lucide-react';
+import { Crosshair, Activity } from 'lucide-react';
 import { C, HudFrame, ExecButton, IndicatorBadge } from '../components/CyberHawkUI.jsx';
 import { api } from '../api.js';
 
@@ -9,17 +9,17 @@ export default function Interactive() {
   const [url, setUrl] = useState('');
   const [name, setName] = useState('');
   const [caseId, setCaseId] = useState('');
-  const [kasmPort, setKasmPort] = useState('6901');
   const [live, setLive] = useState(null);
   const [busy, setBusy] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [err, setErr] = useState('');
   const timer = useRef(null);
 
-  useEffect(() => { api.config().then((r) => setKasmPort(r.kasm_port || '6901')).catch(() => {}); }, []);
   useEffect(() => () => timer.current && clearTimeout(timer.current), []);
 
-  const kasmUrl = `https://${window.location.hostname}:${kasmPort}/`;
+  // noVNC is proxied through nginx at /novnc/ — no SSL cert needed.
+  // Pass VNC password and autoconnect so kasmweb connects immediately without a login prompt.
+  const kasmUrl = '/novnc/?password=changeme-kasm&autoconnect=1';
 
   const start = async () => {
     if (!url.trim()) return;
@@ -91,16 +91,10 @@ export default function Interactive() {
         </HudFrame>
       )}
 
-      {/* noVNC desktop */}
-      <HudFrame title="Analyst Browser (noVNC)" subtitle="login: kasm_user">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem', fontFamily: "'Share Tech Mono', monospace", fontSize: '0.66rem', color: '#88aa88' }}>
-          <span>First time: open in a new tab once to accept the self-signed certificate, then it embeds here.</span>
-          <a href={kasmUrl} target="_blank" rel="noopener" style={{ marginLeft: 'auto', display: 'inline-flex', gap: '0.3rem', alignItems: 'center', color: C.cyan }}>
-            open browser in new tab <ExternalLink size={11} />
-          </a>
-        </div>
+      {/* noVNC desktop — served via nginx proxy at /novnc/ (no SSL cert needed) */}
+      <HudFrame title="Analyst Browser (noVNC)" subtitle="auto-connect · analyst view">
         <iframe title="analyst-browser" src={kasmUrl}
-          style={{ width: '100%', height: '62vh', border: `1px solid ${C.border}`, borderRadius: '0.4rem', background: '#000' }} />
+          style={{ width: '100%', height: '66vh', border: `1px solid ${C.border}`, borderRadius: '0.4rem', background: '#000' }} />
       </HudFrame>
     </div>
   );
