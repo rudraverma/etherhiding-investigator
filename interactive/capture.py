@@ -243,6 +243,8 @@ class Session:
 
 
 S = Session()
+_timeout_task: asyncio.Task | None = None
+SESSION_TIMEOUT_S = int(os.getenv("SESSION_TIMEOUT_S", "120"))
 
 
 class VisitBody(BaseModel):
@@ -358,9 +360,13 @@ async def visit(body: VisitBody):
 @app.post("/session/start")
 async def session_start(body: StartBody):
     """INTERACTIVE mode: navigate; the analyst drives via noVNC."""
+    global _timeout_task
     if S.active:
         raise HTTPException(status_code=409, detail="A browser session is already active; finalize it first")
     page, main_status = await _begin(body.url, body.case_dir, body.case_id)
+    if _timeout_task and not _timeout_task.done():
+        _timeout_task.cancel()
+    _timeout_task = asyncio.create_task(_auto_finalize())
     return {"ok": True, "main_status": main_status, "case_id": body.case_id}
 
 
@@ -370,9 +376,32 @@ async def session_status():
     return {"ok": True, **summ}
 
 
+async def _auto_finalize():
+    """Auto-end the session after SESSION_TIMEOUT_S seconds so stale sessions never block new scans."""
+    await asyncio.sleep(SESSION_TIMEOUT_S)
+    if not S.active:
+        return
+    try:
+        page = await S.active_page()
+        await _capture_dom(page)
+        await _capture_hooks(page)
+    except Exception:
+        pass
+    if S.case_dir:
+        try:
+            summ = S.summary()
+            (S.case_dir / "browser" / "visit_summary.json").write_text(json.dumps(summ, default=str, indent=2))
+        except Exception:
+            pass
+    S.active = False
+
+
 @app.post("/session/finalize")
 async def session_finalize():
     """Capture the current DOM + in-page hooks and return the final summary."""
+    global _timeout_task
+    if _timeout_task and not _timeout_task.done():
+        _timeout_task.cancel()
     try:
         page = await S.active_page()
         await _capture_dom(page)
