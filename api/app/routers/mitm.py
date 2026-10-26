@@ -7,11 +7,12 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+import httpx
 from fastapi import APIRouter, Depends, Query
 
 from app import db
 from app.auth import require_auth
-from app.config import MITM_FLOWS_PATH
+from app.config import MITM_FLOWS_PATH, INTERACTIVE_URL
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
 
@@ -60,12 +61,23 @@ async def flows(id: str = Query(...)):
         if rec.get("epoch", 0) < start_epoch - 3:
             continue
         host = (rec.get("host") or "").lower()
-        # Display scope: this target's own traffic, plus blockchain-RPC and
-        # SSRF-blocked flows in the window (the eth_call goes to the RPC provider
-        # host, not the victim domain, so it must be included by flag, not host).
         if (host == domain or host.endswith("." + domain)
                 or rec.get("is_blockchain_rpc") or rec.get("blocked_ssrf")):
             matched.append(rec)
+
+    # If no file flows found, also pull from the interactive container's in-memory
+    # list — this handles the case where the flows file was not writable during the
+    # session (kasm-user uid mismatch) so flows lived only in memory.
+    if not matched:
+        try:
+            async with httpx.AsyncClient(timeout=5) as c:
+                r = await c.get(f"{INTERACTIVE_URL}/session/flows", params={"case_id": id})
+                if r.status_code == 200:
+                    live = r.json().get("flows", [])
+                    matched = live[-_MAX_RETURN:]
+        except Exception:
+            pass
+
     matched = matched[-_MAX_RETURN:]
     return {
         "ok": True,

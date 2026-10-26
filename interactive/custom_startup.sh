@@ -14,6 +14,8 @@ export DISPLAY="${DISPLAY:-:1}"
 CDP_PORT="${CDP_PORT:-9222}"
 PROFILE_DIR="/home/kasm-user/.config/eh-chrome"
 mkdir -p "$PROFILE_DIR" /workspace/_mitm 2>/dev/null || true
+# Ensure the flows file is writable by the capture service (uid 1000 kasm-user)
+touch /workspace/_mitm/flows.jsonl && chmod 666 /workspace/_mitm/flows.jsonl && chmod 777 /workspace/_mitm 2>/dev/null || true
 
 # Stop any chrome the base image auto-started, so ours (with remote debugging)
 # is the one the analyst sees and the one we attach to.

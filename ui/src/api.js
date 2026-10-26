@@ -44,6 +44,7 @@ export const api = {
   }),
   interactiveStatus: (id) => req(`/api/interactive/status?id=${encodeURIComponent(id)}`),
   interactiveFinalize: (id) => req(`/api/interactive/finalize?id=${encodeURIComponent(id)}`, { method: 'POST' }),
+  interactiveAbort: () => req('/api/interactive/abort', { method: 'POST' }),
   cases: () => req('/api/cases'),
   case: (id) => req(`/api/case?id=${encodeURIComponent(id)}`),
   tree: (id) => req(`/api/case/tree?id=${encodeURIComponent(id)}`),

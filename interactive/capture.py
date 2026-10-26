@@ -415,6 +415,13 @@ async def session_finalize():
     return {"ok": True, **summ}
 
 
+@app.get("/session/flows")
+async def session_flows(case_id: str = ""):
+    """Return the in-memory flow list for the current active session."""
+    flows = [f for f in S.flows if not case_id or f.get("case_id") == case_id]
+    return {"ok": True, "case_id": S.case_id, "count": len(flows), "flows": flows}
+
+
 @app.post("/session/abort")
 async def session_abort():
     """Force-clear the active session without running the pipeline."""

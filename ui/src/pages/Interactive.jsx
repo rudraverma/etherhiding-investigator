@@ -154,7 +154,7 @@ export default function Interactive() {
           <div style={{ marginTop: '0.9rem', display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
             <ExecButton onClick={finalize} loading={finalizing} label="ANALYZE & GENERATE REPORT" loadingLabel="ANALYZING..." icon={Activity} color={C.red} />
             <button onClick={() => stop(false)} disabled={stopping || finalizing}
-              style={{ ...btnBase, border: `1px solid ${C.border}`, color: '#88aa88' }}>
+              style={{ ...btnBase, border: `1px solid ${C.red}88`, color: C.red, background: `${C.red}11` }}>
               <StopCircle size={13} style={{ marginRight: 4 }} />{stopping ? 'STOPPING...' : 'STOP SESSION'}
             </button>
           </div>
