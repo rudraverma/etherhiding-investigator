@@ -33,9 +33,11 @@ def _is_blocked_ip(ip: str) -> bool:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return True  # unparseable → block
+    # is_unspecified (0.0.0.0) is NOT a private/internal address — some DNS
+    # servers return it as a "null route" response. Let the browser handle it.
     return (
         addr.is_private or addr.is_loopback or addr.is_link_local or
-        addr.is_multicast or addr.is_reserved or addr.is_unspecified
+        addr.is_multicast or addr.is_reserved
     )
 
 
