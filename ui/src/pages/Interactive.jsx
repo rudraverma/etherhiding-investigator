@@ -1,6 +1,6 @@
 ﻿import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Crosshair, Activity, Network } from 'lucide-react';
+import { Crosshair, Activity, Network, StopCircle } from 'lucide-react';
 import { C, HudFrame, ExecButton, IndicatorBadge } from '../components/CyberHawkUI.jsx';
 import { api } from '../api.js';
 
@@ -12,7 +12,9 @@ export default function Interactive() {
   const [live, setLive] = useState(null);
   const [busy, setBusy] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [err, setErr] = useState('');
+  const [conflict, setConflict] = useState(false);
   const [flows, setFlows] = useState([]);
   const [flowsErr, setFlowsErr] = useState('');
   const timer = useRef(null);
@@ -23,7 +25,7 @@ export default function Interactive() {
     flowTimer.current && clearTimeout(flowTimer.current);
   }, []);
 
-  // Start live flow polling when a session is active.
+  // Live flow polling while session is active.
   useEffect(() => {
     if (!caseId) return;
     let active = true;
@@ -37,25 +39,51 @@ export default function Interactive() {
       if (active) flowTimer.current = setTimeout(pollFlows, 3000);
     };
     pollFlows();
-    return () => {
-      active = false;
-      flowTimer.current && clearTimeout(flowTimer.current);
-    };
+    return () => { active = false; flowTimer.current && clearTimeout(flowTimer.current); };
   }, [caseId]);
 
-  // noVNC is proxied through nginx at /novnc/ — no SSL cert needed.
-  // Pass VNC password and autoconnect so kasmweb connects immediately without a login prompt.
   const kasmUrl = '/novnc/?password=changeme-kasm&autoconnect=1';
+
+  const clearTimers = () => {
+    timer.current && clearTimeout(timer.current);
+    flowTimer.current && clearTimeout(flowTimer.current);
+  };
+
+  const resetSession = () => {
+    clearTimers();
+    setCaseId(''); setLive(null); setFlows([]); setFlowsErr(''); setConflict(false);
+  };
 
   const start = async () => {
     if (!url.trim()) return;
-    setBusy(true); setErr(''); setLive(null); setFlows([]); setFlowsErr('');
+    setBusy(true); setErr(''); setConflict(false); setLive(null); setFlows([]); setFlowsErr('');
     try {
       const r = await api.interactiveStart(url.trim(), name.trim());
       setCaseId(r.case_id);
       poll(r.case_id);
-    } catch (e) { setErr(String(e.message || e)); }
+    } catch (e) {
+      const msg = String(e.message || e);
+      if (msg.includes('409') || msg.toLowerCase().includes('conflict')) {
+        setConflict(true);
+        setErr('A previous session is still active.');
+      } else {
+        setErr(msg);
+      }
+    }
     finally { setBusy(false); }
+  };
+
+  const stop = async (thenStart = false) => {
+    setStopping(true); setErr('');
+    try {
+      await api.interactiveAbort();
+      resetSession();
+      if (thenStart) await start();
+    } catch (e) {
+      setErr(`Stop failed: ${e.message || e}`);
+    } finally {
+      setStopping(false);
+    }
   };
 
   const poll = async (id) => {
@@ -66,7 +94,7 @@ export default function Interactive() {
   const finalize = async () => {
     if (!caseId) return;
     setFinalizing(true); setErr('');
-    flowTimer.current && clearTimeout(flowTimer.current);
+    clearTimers();
     try {
       await api.interactiveFinalize(caseId);
       nav(`/live?id=${encodeURIComponent(caseId)}`);
@@ -96,7 +124,18 @@ export default function Interactive() {
           </div>
           <ExecButton onClick={start} loading={busy} label="OPEN IN BROWSER" loadingLabel="OPENING..." icon={Crosshair} />
         </div>
-        {err && <div style={{ marginTop: '0.75rem' }}><IndicatorBadge type="warning" message={err} /></div>}
+
+        {/* 409 conflict — offer stop+retry */}
+        {conflict && (
+          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <IndicatorBadge type="warning" message="Session conflict — a previous session is still active." />
+            <button onClick={() => stop(true)} disabled={stopping}
+              style={{ ...btnBase, background: `linear-gradient(135deg,${C.red}cc,${C.red}88)`, border: `1px solid ${C.red}`, color: '#110000' }}>
+              <StopCircle size={13} style={{ marginRight: 4 }} />{stopping ? 'STOPPING...' : 'FORCE STOP & RETRY'}
+            </button>
+          </div>
+        )}
+        {err && !conflict && <div style={{ marginTop: '0.75rem' }}><IndicatorBadge type="warning" message={err} /></div>}
       </HudFrame>
 
       {/* Live signals + controls */}
@@ -112,43 +151,41 @@ export default function Interactive() {
           {(live?.contracts || []).map((c, i) => (
             <div key={i} style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.7rem', color: C.red }}>contract: {c}</div>
           ))}
-          <div style={{ marginTop: '0.9rem' }}>
+          <div style={{ marginTop: '0.9rem', display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
             <ExecButton onClick={finalize} loading={finalizing} label="ANALYZE & GENERATE REPORT" loadingLabel="ANALYZING..." icon={Activity} color={C.red} />
+            <button onClick={() => stop(false)} disabled={stopping || finalizing}
+              style={{ ...btnBase, border: `1px solid ${C.border}`, color: '#88aa88' }}>
+              <StopCircle size={13} style={{ marginRight: 4 }} />{stopping ? 'STOPPING...' : 'STOP SESSION'}
+            </button>
           </div>
         </HudFrame>
       )}
 
-      {/* Live MITM flows — visible while the session is active, polling every 3 s */}
+      {/* Live MITM flows */}
       {caseId && (
-        <HudFrame title="Live Network Flows" subtitle={`${flows.length} flows captured`} accentColor={C.green} icon={Network}>
+        <HudFrame title="Live Network Flows" subtitle={`${flows.length} flows captured`} accentColor={C.green}>
           {flowsErr && <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.68rem', color: C.red, marginBottom: '0.5rem' }}>{flowsErr}</div>}
           {flows.length === 0 ? (
-            <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.68rem', color: '#446644' }}>
-              Waiting for network traffic...
-            </div>
+            <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.68rem', color: '#446644' }}>Waiting for network traffic...</div>
           ) : (
             <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: '260px' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: "'Share Tech Mono', monospace", fontSize: '0.65rem' }}>
                 <thead>
-                  <tr>
-                    {['time','method','host','path','status','flags'].map(h => (
-                      <th key={h} style={{ textAlign: 'left', padding: '0.25rem 0.4rem', color: '#557755', borderBottom: `1px solid ${C.border}`, whiteSpace: 'nowrap' }}>{h.toUpperCase()}</th>
-                    ))}
-                  </tr>
+                  <tr>{['time','method','host','path','status','flags'].map(h => (
+                    <th key={h} style={{ textAlign: 'left', padding: '0.25rem 0.4rem', color: '#557755', borderBottom: `1px solid ${C.border}`, whiteSpace: 'nowrap' }}>{h.toUpperCase()}</th>
+                  ))}</tr>
                 </thead>
                 <tbody>
                   {[...flows].reverse().map((f, i) => {
                     const isRpc = f.is_blockchain_rpc;
                     const isC2  = f.is_jsonp_c2 || f.is_jsrepo;
                     const rowCol = isRpc ? C.red : isC2 ? C.gold : C.green;
-                    const ts = f.ts ? f.ts.slice(11, 19) : '';
-                    const path = (f.path || '/').slice(0, 40);
                     return (
                       <tr key={i} style={{ borderBottom: `1px solid #112211`, background: isRpc ? '#1a0000' : isC2 ? '#1a1000' : 'transparent' }}>
-                        <td style={{ padding: '0.2rem 0.4rem', color: '#557755', whiteSpace: 'nowrap' }}>{ts}</td>
+                        <td style={{ padding: '0.2rem 0.4rem', color: '#557755', whiteSpace: 'nowrap' }}>{(f.ts || '').slice(11,19)}</td>
                         <td style={{ padding: '0.2rem 0.4rem', color: rowCol }}>{f.method || 'GET'}</td>
                         <td style={{ padding: '0.2rem 0.4rem', color: rowCol, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.host || ''}</td>
-                        <td style={{ padding: '0.2rem 0.4rem', color: '#88aa88', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.path}>{path}</td>
+                        <td style={{ padding: '0.2rem 0.4rem', color: '#88aa88', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.path}>{(f.path || '/').slice(0,40)}</td>
                         <td style={{ padding: '0.2rem 0.4rem', color: f.status >= 400 ? C.red : rowCol }}>{f.status || ''}</td>
                         <td style={{ padding: '0.2rem 0.4rem', whiteSpace: 'nowrap' }}>
                           {isRpc && <span style={{ color: C.red, marginRight: 4 }}>CHAIN</span>}
@@ -165,8 +202,19 @@ export default function Interactive() {
         </HudFrame>
       )}
 
-      {/* noVNC desktop — served via nginx proxy at /novnc/ (no SSL cert needed) */}
+      {/* noVNC desktop — STOP SESSION button sits just above the iframe */}
       <HudFrame title="Analyst Browser (noVNC)" subtitle="auto-connect · analyst view">
+        {!caseId && (
+          <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.65rem', color: '#446644' }}>
+              No active session. Enter a URL above and click OPEN IN BROWSER.
+            </span>
+            <button onClick={() => stop(false)} disabled={stopping}
+              style={{ ...btnBase, border: `1px solid ${C.border}`, color: '#557755', fontSize: '0.62rem' }}>
+              <StopCircle size={11} style={{ marginRight: 3 }} />{stopping ? 'CLEARING...' : 'CLEAR STUCK SESSION'}
+            </button>
+          </div>
+        )}
         <iframe title="analyst-browser" src={kasmUrl}
           style={{ width: '100%', height: '66vh', border: `1px solid ${C.border}`, borderRadius: '0.4rem', background: '#000' }} />
       </HudFrame>
@@ -187,3 +235,4 @@ function Sig({ label, on, value }) {
 
 const lbl = { display: 'block', fontFamily: "'Share Tech Mono', monospace", fontSize: '0.62rem', color: '#557755', letterSpacing: '0.1em', marginBottom: '0.3rem' };
 const inp = { width: '100%', padding: '0.6rem', background: '#000', border: `1px solid ${C.border}`, borderRadius: '0.375rem', color: C.green, fontFamily: "'Share Tech Mono', monospace", fontSize: '0.82rem' };
+const btnBase = { display: 'inline-flex', alignItems: 'center', padding: '0.45rem 0.75rem', borderRadius: '0.35rem', background: 'transparent', cursor: 'pointer', fontFamily: "'Share Tech Mono', monospace", fontSize: '0.7rem', letterSpacing: '0.05em' };
