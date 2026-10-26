@@ -68,6 +68,13 @@ async def _finalize_capture() -> dict:
         r.raise_for_status()
         return r.json()
 
+async def abort_interactive_session() -> dict:
+    """Force-clear any active session without running the pipeline (used by the Stop button).""""
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.post(f"{INTERACTIVE_URL}/session/abort")
+        r.raise_for_status()
+        return r.json()
+
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 async def _fetch_scripts(ext_scripts: list[str], case_path: Path, log) -> list[str]:

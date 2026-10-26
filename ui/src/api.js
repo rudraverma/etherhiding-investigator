@@ -1,5 +1,5 @@
-// EtherHawk API client. Same-origin (nginx proxies /api). The dashboard token is
-// kept in localStorage and sent as a Bearer header on every request — including the
+﻿// EtherHawk API client. Same-origin (nginx proxies /api). The dashboard token is
+// kept in localStorage and sent as a Bearer header on every request â€” including the
 // SSE stream, which we consume via fetch + ReadableStream so the header is preserved
 // (EventSource cannot set headers, and we refuse to put the token in a URL).
 
@@ -59,7 +59,7 @@ export const api = {
   }),
 };
 
-// Fetch an artifact's bytes (authed) — caller decides text vs blob.
+// Fetch an artifact's bytes (authed) â€” caller decides text vs blob.
 export async function fetchArtifactText(id, path) {
   const res = await fetch(`/api/case/artifact?id=${encodeURIComponent(id)}&path=${encodeURIComponent(path)}`, { headers: authHeaders() });
   if (res.status === 401) throw new AuthError('unauthorized');

@@ -96,3 +96,13 @@ async def finalize(id: str = Query(...)):
                   "domain": row["domain"], "case_path": row["case_path"]}
     asyncio.create_task(_finalize_bg(id, row["url"], row["domain"], case_path))
     return {"ok": True, "case_id": id}
+
+
+@router.post("/interactive/abort")
+async def abort():
+    """Force-clear a stuck interactive session so a new one can start."""
+    try:
+        await orchestrator.abort_interactive_session()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Abort failed: {e}")
+    return {"ok": True}

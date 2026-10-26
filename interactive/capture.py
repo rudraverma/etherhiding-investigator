@@ -413,3 +413,19 @@ async def session_finalize():
         (S.case_dir / "browser" / "visit_summary.json").write_text(json.dumps(summ, default=str, indent=2))
     S.active = False  # session finalized; a new one may start
     return {"ok": True, **summ}
+
+
+@app.post("/session/abort")
+async def session_abort():
+    """Force-clear the active session without running the pipeline."""
+    global _timeout_task
+    if _timeout_task and not _timeout_task.done():
+        _timeout_task.cancel()
+    S.active = False
+    S.case_id = ""
+    try:
+        page = await asyncio.wait_for(S.active_page(), timeout=3)
+        await asyncio.wait_for(page.goto("about:blank"), timeout=5)
+    except Exception:
+        pass
+    return {"ok": True, "msg": "session cleared"}
