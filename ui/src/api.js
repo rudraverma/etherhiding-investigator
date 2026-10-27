@@ -6,8 +6,20 @@
 const TOKEN_KEY = 'eh_token';
 
 export const getToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } };
-export const setToken = (t) => { try { localStorage.setItem(TOKEN_KEY, t || ''); } catch {} };
-export const clearToken = () => { try { localStorage.removeItem(TOKEN_KEY); } catch {} };
+export const setToken = (t) => {
+  try {
+    localStorage.setItem(TOKEN_KEY, t || '');
+    // Cookie so the noVNC iframe + websocket (which can't send a Bearer header)
+    // pass the nginx auth_request gate. Same-origin, SameSite=Strict.
+    document.cookie = `eh_token=${t || ''}; path=/; SameSite=Strict; max-age=86400`;
+  } catch {}
+};
+export const clearToken = () => {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    document.cookie = 'eh_token=; path=/; max-age=0; SameSite=Strict';
+  } catch {}
+};
 
 function authHeaders(extra = {}) {
   const h = { ...extra };

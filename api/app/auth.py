@@ -24,6 +24,13 @@ def _ok(candidate: str, secret: str) -> bool:
     return hmac.compare_digest(candidate, secret)
 
 
+def token_valid(candidate: str | None) -> bool:
+    """True if `candidate` matches the dashboard token or the appliance API key.
+    Used by the nginx auth_request gate for the noVNC proxy (cookie-based)."""
+    return _ok(candidate or "", db.get_setting("dashboard_token")) or \
+        _ok(candidate or "", db.get_setting("api_key"))
+
+
 async def require_auth(
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None),

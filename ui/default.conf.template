@@ -7,34 +7,47 @@ server {
     # Do not advertise nginx version.
     server_tokens off;
 
-    # noVNC analyst browser — proxy through nginx so the user never needs to
-    # accept a self-signed cert. nginx handles the SSL internally (self-signed
-    # cert is fine over the Docker internal network). WebSocket upgrades are
-    # forwarded so the VNC canvas works.
+    # ── Auth gate for the noVNC proxy ────────────────────────────────────────
+    # The analyst browser is a live, internet-capable Chrome — it must not be
+    # reachable just by hitting port 8080. The dashboard sets an `eh_token` cookie
+    # on login; this internal subrequest validates it against the API before nginx
+    # proxies /novnc/ or /websockify. 204 = allow, 401 = deny.
+    location = /__novnc_auth {
+        internal;
+        proxy_pass http://etherhawk-api:8000/api/novnc-auth;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Host $host;
+        # Cookie is forwarded by default so the API sees eh_token.
+    }
+
+    # noVNC analyst browser — proxied so the user never sees the self-signed cert.
+    # The kasm Basic-Auth credential is built from KASM_PASSWORD at container start
+    # (${KASM_BASIC_AUTH}); it is never hardcoded in source.
     location /novnc/ {
+        auth_request /__novnc_auth;
         proxy_pass https://etherhawk-interactive:6901/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host etherhawk-interactive;
-        proxy_set_header Authorization "Basic a2FzbV91c2VyOmNoYW5nZW1lLWthc20=";
+        proxy_set_header Authorization "${KASM_BASIC_AUTH}";
         proxy_ssl_verify off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
         proxy_buffering off;
     }
 
-    # kasmweb/noVNC WebSocket endpoint — the JS inside the iframe constructs its
-    # WebSocket URL from window.location.hostname:port (10.100.20.3:8107) and
-    # the configured path "websockify", so the upgrade request arrives here at
-    # /websockify, NOT at /novnc/websockify. Proxy it to the kasmweb backend.
+    # kasmweb/noVNC WebSocket endpoint. The iframe JS builds its WS URL as
+    # <host>:<port>/websockify, so the upgrade arrives here (not /novnc/websockify).
     location /websockify {
+        auth_request /__novnc_auth;
         proxy_pass https://etherhawk-interactive:6901/websockify;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host etherhawk-interactive;
-        proxy_set_header Authorization "Basic a2FzbV91c2VyOmNoYW5nZW1lLWthc20=";
+        proxy_set_header Authorization "${KASM_BASIC_AUTH}";
         proxy_ssl_verify off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
@@ -58,7 +71,4 @@ server {
         proxy_read_timeout 1800s;
         client_max_body_size 32m;
     }
-
-    # mitmweb is intentionally NOT proxied here — it has no auth of its own. The
-    # dashboard's MITM tab renders flows natively through the token-guarded /api.
 }

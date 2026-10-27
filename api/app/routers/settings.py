@@ -75,7 +75,11 @@ async def get_config():
     # Port the interactive browser's noVNC view is published on (host side), so the
     # dashboard can build the embed URL: https://<dashboard-host>:<kasm_port>/
     kasm_port = os.getenv("KASM_PORT", "6901")
-    return {"ok": True, "branding": branding, "kasm_port": kasm_port}
+    # The noVNC VNC password, handed to the already-authenticated dashboard client
+    # at runtime so it is never hardcoded in source or the built bundle.
+    kasm_password = os.getenv("KASM_PASSWORD", "changeme-kasm")
+    return {"ok": True, "branding": branding, "kasm_port": kasm_port,
+            "kasm_password": kasm_password}
 
 
 class BrandingBody(BaseModel):

@@ -9,6 +9,9 @@ services:
     restart: unless-stopped
     ports:
       - "${UI_PORT:-8080}:80"          # dashboard — put behind VPN/tunnel; token-guarded
+    environment:
+      # Used only to build the kasm Basic-Auth header for the noVNC proxy at start.
+      - KASM_PASSWORD=${KASM_PASSWORD:-changeme-kasm}
     depends_on:
       etherhawk-api:
         condition: service_healthy

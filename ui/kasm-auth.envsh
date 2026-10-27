@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs (sourced) by the nginx image entrypoint BEFORE the envsubst-on-templates
+# step. Builds the kasm Basic-Auth header from KASM_PASSWORD at container start so
+# the credential is never hardcoded in source or the built image.
+export KASM_BASIC_AUTH="Basic $(printf '%s' "kasm_user:${KASM_PASSWORD:-changeme-kasm}" | base64 | tr -d '\n')"

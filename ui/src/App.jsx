@@ -148,6 +148,7 @@ export default function App() {
   useEffect(() => {
     (async () => {
       if (!getToken()) { setChecked(true); return; }
+      setToken(getToken());   // refresh the eh_token cookie (for the noVNC gate)
       try { await api.checkAuth(); setAuthed(true); await loadBranding(); }
       catch { clearToken(); }
       finally { setChecked(true); }

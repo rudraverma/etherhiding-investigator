@@ -42,7 +42,14 @@ export default function Interactive() {
     return () => { active = false; flowTimer.current && clearTimeout(flowTimer.current); };
   }, [caseId]);
 
-  const kasmUrl = '/novnc/?password=changeme-kasm&autoconnect=1';
+  // Build the noVNC URL from the runtime kasm password (handed to the authed
+  // client by the API) — never hardcoded in source.
+  const [kasmUrl, setKasmUrl] = useState('/novnc/?autoconnect=1');
+  useEffect(() => {
+    api.config()
+      .then((r) => setKasmUrl(`/novnc/?password=${encodeURIComponent(r.kasm_password || '')}&autoconnect=1`))
+      .catch(() => {});
+  }, []);
 
   const clearTimers = () => {
     timer.current && clearTimeout(timer.current);
