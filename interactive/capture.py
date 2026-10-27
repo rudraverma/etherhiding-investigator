@@ -204,6 +204,7 @@ async def _restart_chrome_fresh():
         chrome_bin,
         "--no-sandbox",
         "--ignore-gpu-blocklist",
+        "--disable-blink-features=AutomationControlled",
         f"--remote-debugging-port={CDP_PORT}",
         "--remote-debugging-address=127.0.0.1",
         "--remote-allow-origins=*",
