@@ -19,6 +19,10 @@ Two modes, same Chrome:
   - GET  /session/status live signal summary (eth_call / contract / clickfix)
   - POST /session/finalize capture DOM + stop; return summary
 
+AnyRun-style isolation: every session start wipes the Chrome profile completely
+and restarts Chrome fresh — no cookies, no fingerprints, no Cloudflare history
+carry over between investigations.
+
 No verdict logic here — facts only. The API's deterministic engine decides.
 """
 
@@ -28,6 +32,9 @@ import asyncio
 import json
 import os
 import re
+import shutil
+import socket
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,7 +45,9 @@ from pydantic import BaseModel
 from playwright.async_api import async_playwright
 
 CDP_URL = os.getenv("CDP_URL", "http://127.0.0.1:9222")
+CDP_PORT = int(os.getenv("CDP_PORT", "9222"))
 FLOWS_PATH = Path(os.getenv("MITM_FLOWS_PATH", "/workspace/_mitm/flows.jsonl"))
+PROFILE_DIR = Path(os.getenv("CHROME_PROFILE_DIR", "/home/kasm-user/.config/eh-chrome"))
 HOOKS_JS = Path(__file__).with_name("hooks.js").read_text(encoding="utf-8")
 
 # Init scripts injected into every page context.
@@ -145,6 +154,79 @@ def _parse_rpc(body: str | None) -> list[dict]:
                 selector = d[:10] if d.startswith("0x") else ""
             out.append({"method": str(c.get("method")).lower(), "contract": contract, "selector": selector})
     return out
+
+
+def _find_chrome_bin() -> str:
+    for candidate in [
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ]:
+        if Path(candidate).exists():
+            return candidate
+    result = subprocess.run(["which", "google-chrome"], capture_output=True, text=True)
+    return result.stdout.strip() or "/usr/bin/google-chrome"
+
+
+async def _restart_chrome_fresh():
+    """Kill Chrome, wipe its profile dir, and start a brand-new instance.
+
+    AnyRun / Browserling model: every investigation gets a completely clean
+    browser — zero cookies, zero cache, zero Cloudflare fingerprint/clearance
+    history from prior sessions. Called at the start of every _begin() so each
+    new investigation is as isolated as a fresh VM snapshot.
+    """
+    # Disconnect Playwright so we're not holding CDP connections
+    if S.browser is not None:
+        try:
+            await S.browser.close()
+        except Exception:
+            pass
+        S.browser = None
+        S.context = None
+
+    # Kill all Chrome processes in this container
+    subprocess.run(["pkill", "-9", "-f", "google-chrome"], capture_output=True)
+    subprocess.run(["pkill", "-9", "-f", "chromium"], capture_output=True)
+    await asyncio.sleep(1.5)
+
+    # Wipe profile — this is the key step. No profile = no cookies, no fingerprint,
+    # no Cloudflare clearance, no extension state, nothing.
+    if PROFILE_DIR.exists():
+        shutil.rmtree(str(PROFILE_DIR), ignore_errors=True)
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Start fresh Chrome
+    chrome_bin = _find_chrome_bin()
+    subprocess.Popen(
+        [
+            chrome_bin,
+            f"--remote-debugging-port={CDP_PORT}",
+            "--remote-debugging-address=127.0.0.1",
+            "--remote-allow-origins=*",
+            "--no-first-run", "--no-default-browser-check",
+            "--password-store=basic",
+            "--disable-session-crashed-bubble", "--disable-infobars",
+            "--start-maximized",
+            f"--user-data-dir={PROFILE_DIR}",
+            "about:blank",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Wait for CDP port to come up (up to 30 s)
+    for _ in range(30):
+        try:
+            s = socket.create_connection(("127.0.0.1", CDP_PORT), timeout=1)
+            s.close()
+            break
+        except OSError:
+            await asyncio.sleep(1)
+
+    # Give Chrome a moment to finish its startup sequence
+    await asyncio.sleep(2)
 
 
 class Session:
@@ -341,6 +423,9 @@ async def health():
 
 async def _begin(url: str, case_dir: str, case_id: str):
     async with S.lock:
+        # AnyRun model: wipe Chrome completely before every investigation so each
+        # session starts with zero cookies, cache, and fingerprint history.
+        await _restart_chrome_fresh()
         await S.ensure_browser()
         S.reset()
         S.case_id = case_id
@@ -493,15 +578,12 @@ async def session_flows(case_id: str = ""):
 
 @app.post("/session/abort")
 async def session_abort():
-    """Force-clear the active session without running the pipeline."""
+    """Force-clear the active session and immediately restart Chrome fresh."""
     global _timeout_task
     if _timeout_task and not _timeout_task.done():
         _timeout_task.cancel()
     S.active = False
     S.case_id = ""
-    try:
-        page = await asyncio.wait_for(S.active_page(), timeout=3)
-        await asyncio.wait_for(page.goto("about:blank"), timeout=5)
-    except Exception:
-        pass
-    return {"ok": True, "msg": "session cleared"}
+    # Wipe Chrome immediately on abort — next investigation starts clean.
+    await _restart_chrome_fresh()
+    return {"ok": True, "msg": "session cleared — Chrome restarted fresh"}
