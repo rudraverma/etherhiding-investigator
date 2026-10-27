@@ -42,7 +42,7 @@ export default function Interactive() {
     return () => { active = false; flowTimer.current && clearTimeout(flowTimer.current); };
   }, [caseId]);
 
-  const kasmUrl = '/novnc/?password=changeme-kasm&autoconnect=1';
+  const kasmUrl = '/novnc/?password=changeme-kasm&autoconnect=1&quality=9&compression=2';
 
   const clearTimers = () => {
     timer.current && clearTimeout(timer.current);

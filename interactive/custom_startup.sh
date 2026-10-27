@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 ###############################################################################
 # EtherHawk custom startup for kasmweb/chrome.
 #
@@ -16,6 +16,17 @@ PROFILE_DIR="/home/kasm-user/.config/eh-chrome"
 mkdir -p "$PROFILE_DIR" /workspace/_mitm 2>/dev/null || true
 # Ensure the flows file is writable by the capture service (uid 1000 kasm-user)
 touch /workspace/_mitm/flows.jsonl && chmod 666 /workspace/_mitm/flows.jsonl && chmod 777 /workspace/_mitm 2>/dev/null || true
+
+# Set display resolution. VNC_RESOLUTION env is passed to vncserver -geometry but
+# the kasmweb wrapper ignores it when the requested mode is not in its built-in
+# default modelist (e.g. 1280x720). Force it here via xrandr after the X server
+# is up so the analyst gets a proper 1920x1080 desktop regardless.
+TARGET_RES="${VNC_RESOLUTION:-1920x1080}"
+if xrandr --output VNC-0 --mode "$TARGET_RES" 2>/dev/null; then
+    echo "EtherHawk: display set to $TARGET_RES"
+else
+    echo "EtherHawk: xrandr $TARGET_RES failed, staying at current resolution"
+fi
 
 # Stop any chrome the base image auto-started, so ours (with remote debugging)
 # is the one the analyst sees and the one we attach to.
