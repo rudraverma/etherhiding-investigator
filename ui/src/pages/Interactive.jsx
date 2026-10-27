@@ -42,7 +42,12 @@ export default function Interactive() {
     return () => { active = false; flowTimer.current && clearTimeout(flowTimer.current); };
   }, [caseId]);
 
-  const kasmUrl = '/novnc/?password=changeme-kasm&autoconnect=1&quality=9&compression=2';
+  // resize=remote: kasmweb resizes the VNC desktop to match the iframe viewport --
+  // no overflow, no horizontal scrollbar, no cut-off. Works with kasmweb's custom
+  // bundle (unlike resize=scale which throws a lastActiveAt TypeError).
+  // quality=4: sharp enough to read website text, ~4x smaller frames than quality=9.
+  // compression=7: more zlib on LAN costs negligible CPU but cuts WebSocket payload.
+  const kasmUrl = '/novnc/?password=changeme-kasm&autoconnect=1&quality=4&compression=7&resize=remote';
 
   const clearTimers = () => {
     timer.current && clearTimeout(timer.current);
@@ -216,7 +221,7 @@ export default function Interactive() {
           </div>
         )}
         <iframe title="analyst-browser" src={kasmUrl}
-          style={{ width: '100%', height: '66vh', border: `1px solid ${C.border}`, borderRadius: '0.4rem', background: '#000' }} />
+          style={{ width: '100%', height: '85vh', border: `1px solid ${C.border}`, borderRadius: '0.4rem', background: '#000' }} />
       </HudFrame>
     </div>
   );

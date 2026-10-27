@@ -1,5 +1,8 @@
 ﻿# Override: rename all containers with -v2 suffix so v1 and v2 can run side by side.
-# Also tune kasmweb/chrome for analyst use: 1080p desktop, 24fps cap, no audio stream.
+# Also tune kasmweb/chrome for analyst use: audio disabled (saves 50-100 kbps
+# on the WebSocket), frame rate capped at 24fps. Resolution is intentionally NOT
+# forced here — noVNC resize=remote tells kasmweb to match the client viewport
+# dynamically, so the VNC desktop exactly fits the iframe with no overflow/cut-off.
 services:
   etherhawk-ui:
     container_name: etherhawk-ui-v2
@@ -8,16 +11,7 @@ services:
   etherhawk-interactive:
     container_name: etherhawk-interactive-v2
     environment:
-      # 1920x1080 is in kasmweb's available modelist; 1280x720 is NOT and falls back
-      # to 1024x768. Use 1080p so the analyst gets a full-quality desktop; noVNC
-      # resize=scale in the iframe URL scales it to fit the panel without scrollbars.
-      - VNC_RESOLUTION=1920x1080
-      # 24fps is smooth for human-driven browsing and halves VNC stream bandwidth vs
-      # the 60fps default. Already the base-image default; explicit here so it survives
-      # any future base-image change.
       - MAX_FRAME_RATE=24
-      # Disable the kasmweb audio stream — saves ~50-100 kbps of WebSocket bandwidth
-      # that would otherwise compete with the VNC video stream.
       - DISABLE_AUDIO=1
   etherhawk-deobf:
     container_name: etherhawk-deobf-v2
