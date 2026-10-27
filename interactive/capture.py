@@ -41,10 +41,12 @@ CDP_URL = os.getenv("CDP_URL", "http://127.0.0.1:9222")
 FLOWS_PATH = Path(os.getenv("MITM_FLOWS_PATH", "/workspace/_mitm/flows.jsonl"))
 HOOKS_JS = Path(__file__).with_name("hooks.js").read_text(encoding="utf-8")
 
-# Minimal, consistency-safe init for a REAL Chrome running headless-in-container:
-# only fix the things a container gets wrong (SwiftShader WebGL = instant bot tell).
-# We deliberately do NOT spoof UA / UA-CH / platform here — real Chrome already
-# reports those correctly, and overriding them would create contradictions.
+# Init scripts injected into every page context.
+# WebGL: fix SwiftShader renderer string (instant bot tell in containers).
+# Windows UA: 99% of ClickFix/EtherHiding targets are Windows EUDs. Linux fingerprint
+# causes sites to gate the payload. Three-layer spoof: CDP Emulation.setUserAgentOverride
+# (controls Sec-CH-UA-* at protocol level) + set_extra_http_headers (HTTP fallback)
+# + JS init script (navigator.platform / navigator.userAgentData).
 WEBGL_FIX_JS = r"""
 (function(){
   try {
@@ -60,6 +62,51 @@ WEBGL_FIX_JS = r"""
     if(window.WebGLRenderingContext)  patch(WebGLRenderingContext.prototype);
     if(window.WebGL2RenderingContext) patch(WebGL2RenderingContext.prototype);
     Object.defineProperty(navigator,'webdriver',{get:function(){return undefined;}});
+  } catch(e){}
+})();
+"""
+
+WINDOWS_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/138.0.0.0 Safari/537.36"
+)
+WINDOWS_UA_META = {
+    "brands": [
+        {"brand": "Chromium", "version": "138"},
+        {"brand": "Google Chrome", "version": "138"},
+        {"brand": "Not)A;Brand", "version": "99"},
+    ],
+    "fullVersionList": [
+        {"brand": "Chromium", "version": "138.0.7204.183"},
+        {"brand": "Google Chrome", "version": "138.0.7204.183"},
+        {"brand": "Not)A;Brand", "version": "99.0.0.0"},
+    ],
+    "platform": "Windows",
+    "platformVersion": "10.0.0",
+    "architecture": "x86",
+    "model": "",
+    "mobile": False,
+    "bitness": "64",
+    "wow64": False,
+}
+WINDOWS_UA_JS = """
+(function(){
+  try {
+    Object.defineProperty(navigator,'platform',{get:()=>'Win32',configurable:true});
+    Object.defineProperty(navigator,'userAgent',{get:()=>
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+      configurable:true});
+    if(navigator.userAgentData){
+      var _uad={
+        brands:[{brand:'Chromium',version:'138'},{brand:'Google Chrome',version:'138'},{brand:'Not)A;Brand',version:'99'}],
+        mobile:false,platform:'Windows',
+        getHighEntropyValues:async function(h){return{platform:'Windows',platformVersion:'10.0.0',
+          architecture:'x86',bitness:'64',uaFullVersion:'138.0.7204.183',
+          fullVersionList:[{brand:'Chromium',version:'138.0.7204.183'},{brand:'Google Chrome',version:'138.0.7204.183'},{brand:'Not)A;Brand',version:'99.0.0.0'}]};}
+      };
+      Object.defineProperty(navigator,'userAgentData',{get:()=>_uad,configurable:true});
+    }
   } catch(e){}
 })();
 """
@@ -135,7 +182,14 @@ class Session:
                 self.browser = await self.pw.chromium.connect_over_cdp(CDP_URL)
                 self.context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
                 await self.context.add_init_script(WEBGL_FIX_JS)
+                await self.context.add_init_script(WINDOWS_UA_JS)
                 await self.context.add_init_script(HOOKS_JS)
+                await self.context.set_extra_http_headers({
+                    "User-Agent": WINDOWS_UA,
+                    "Sec-CH-UA": '"Chromium";v="138", "Google Chrome";v="138", "Not)A;Brand";v="99"',
+                    "Sec-CH-UA-Mobile": "?0",
+                    "Sec-CH-UA-Platform": '"Windows"',
+                })
                 self.context.on("page", self._wire_page)
                 for pg in self.context.pages:
                     self._wire_page(pg)
@@ -147,8 +201,23 @@ class Session:
 
     def _wire_page(self, page):
         try:
+            asyncio.ensure_future(self._apply_windows_ua(page))
             page.on("response", lambda resp: self._on_response(resp))
             page.on("websocket", lambda ws: self._on_ws(ws))
+        except Exception:
+            pass
+
+    async def _apply_windows_ua(self, page):
+        """CDP Emulation.setUserAgentOverride — controls Sec-CH-UA-Platform at protocol
+        level. Must fire before navigation so the very first request is Windows-fingerprinted."""
+        try:
+            cdp = await self.context.new_cdp_session(page)
+            await cdp.send("Emulation.setUserAgentOverride", {
+                "userAgent": WINDOWS_UA,
+                "platform": "Win32",
+                "userAgentMetadata": WINDOWS_UA_META,
+            })
+            await cdp.detach()
         except Exception:
             pass
 
