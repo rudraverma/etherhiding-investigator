@@ -19,6 +19,11 @@ Two modes, same Chrome:
   - GET  /session/status live signal summary (eth_call / contract / clickfix)
   - POST /session/finalize capture DOM + stop; return summary
 
+AnyRun-style isolation: every session start kills Chrome, wipes the profile dir,
+and restarts Chrome fresh — zero cookies, zero fingerprints, zero Cloudflare
+history between investigations. The restart is async-safe (asyncio subprocesses).
+session/abort returns instantly; the wipe happens at the next session start.
+
 No verdict logic here — facts only. The API's deterministic engine decides.
 """
 
@@ -28,6 +33,8 @@ import asyncio
 import json
 import os
 import re
+import shutil
+import socket
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,13 +45,11 @@ from pydantic import BaseModel
 from playwright.async_api import async_playwright
 
 CDP_URL = os.getenv("CDP_URL", "http://127.0.0.1:9222")
+CDP_PORT = int(os.getenv("CDP_PORT", "9222"))
 FLOWS_PATH = Path(os.getenv("MITM_FLOWS_PATH", "/workspace/_mitm/flows.jsonl"))
+PROFILE_DIR = Path(os.getenv("CHROME_PROFILE_DIR", "/home/kasm-user/.config/eh-chrome"))
 HOOKS_JS = Path(__file__).with_name("hooks.js").read_text(encoding="utf-8")
 
-# Minimal, consistency-safe init for a REAL Chrome running headless-in-container:
-# only fix the things a container gets wrong (SwiftShader WebGL = instant bot tell).
-# We deliberately do NOT spoof UA / UA-CH / platform here — real Chrome already
-# reports those correctly, and overriding them would create contradictions.
 WEBGL_FIX_JS = r"""
 (function(){
   try {
@@ -60,6 +65,51 @@ WEBGL_FIX_JS = r"""
     if(window.WebGLRenderingContext)  patch(WebGLRenderingContext.prototype);
     if(window.WebGL2RenderingContext) patch(WebGL2RenderingContext.prototype);
     Object.defineProperty(navigator,'webdriver',{get:function(){return undefined;}});
+  } catch(e){}
+})();
+"""
+
+WINDOWS_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/138.0.0.0 Safari/537.36"
+)
+WINDOWS_UA_META = {
+    "brands": [
+        {"brand": "Chromium", "version": "138"},
+        {"brand": "Google Chrome", "version": "138"},
+        {"brand": "Not)A;Brand", "version": "99"},
+    ],
+    "fullVersionList": [
+        {"brand": "Chromium", "version": "138.0.7204.183"},
+        {"brand": "Google Chrome", "version": "138.0.7204.183"},
+        {"brand": "Not)A;Brand", "version": "99.0.0.0"},
+    ],
+    "platform": "Windows",
+    "platformVersion": "10.0.0",
+    "architecture": "x86",
+    "model": "",
+    "mobile": False,
+    "bitness": "64",
+    "wow64": False,
+}
+WINDOWS_UA_JS = """
+(function(){
+  try {
+    Object.defineProperty(navigator,'platform',{get:()=>'Win32',configurable:true});
+    Object.defineProperty(navigator,'userAgent',{get:()=>
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+      configurable:true});
+    if(navigator.userAgentData){
+      var _uad={
+        brands:[{brand:'Chromium',version:'138'},{brand:'Google Chrome',version:'138'},{brand:'Not)A;Brand',version:'99'}],
+        mobile:false,platform:'Windows',
+        getHighEntropyValues:async function(h){return{platform:'Windows',platformVersion:'10.0.0',
+          architecture:'x86',bitness:'64',uaFullVersion:'138.0.7204.183',
+          fullVersionList:[{brand:'Chromium',version:'138.0.7204.183'},{brand:'Google Chrome',version:'138.0.7204.183'},{brand:'Not)A;Brand',version:'99.0.0.0'}]};}
+      };
+      Object.defineProperty(navigator,'userAgentData',{get:()=>_uad,configurable:true});
+    }
   } catch(e){}
 })();
 """
@@ -100,6 +150,88 @@ def _parse_rpc(body: str | None) -> list[dict]:
     return out
 
 
+def _find_chrome_bin() -> str:
+    real = "/opt/google/chrome/google-chrome"
+    if Path(real).exists():
+        return real
+    for candidate in ["/usr/bin/google-chrome-stable",
+                      "/usr/bin/chromium", "/usr/bin/chromium-browser"]:
+        if Path(candidate).exists():
+            return candidate
+    return real
+
+
+async def _restart_chrome_fresh():
+    """Kill Chrome, wipe its profile, restart clean.
+
+    AnyRun model: each investigation gets a completely fresh browser —
+    zero cookies, zero cache, zero Cloudflare fingerprint/clearance history.
+    Uses asyncio subprocesses so the event loop stays responsive throughout.
+    """
+    # Disconnect Playwright before killing Chrome
+    if S.browser is not None:
+        try:
+            await S.browser.close()
+        except Exception:
+            pass
+        S.browser = None
+        S.context = None
+
+    # Kill Chrome — async so the event loop isn't blocked
+    proc = await asyncio.create_subprocess_exec(
+        "pkill", "-9", "-f", "opt/google/chrome",
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+    )
+    await proc.wait()
+    # NOTE: do NOT pkill "chromium" — Xvnc's cmdline contains "-DLP_ClipTypes chromium/x-web-custom-data"
+    # so pkill -f "chromium" kills the VNC server, crashing the entire container.
+    # pkill -f "opt/google/chrome" above is sufficient to terminate all Chrome processes.
+    await asyncio.sleep(1.5)
+
+    # Wipe profile — no cookies, no fingerprint, no history
+    if PROFILE_DIR.exists():
+        shutil.rmtree(str(PROFILE_DIR), ignore_errors=True)
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Start fresh Chrome (Popen — non-blocking, fire and forget)
+    chrome_bin = _find_chrome_bin()
+    chrome_env = {
+        **os.environ,
+        "DISPLAY": os.getenv("DISPLAY", ":1"),
+        "XAUTHORITY": os.getenv("XAUTHORITY", "/home/kasm-user/.Xauthority"),
+    }
+    await asyncio.create_subprocess_exec(
+        chrome_bin,
+        "--no-sandbox",
+        "--ignore-gpu-blocklist",
+        "--disable-blink-features=AutomationControlled",
+        f"--remote-debugging-port={CDP_PORT}",
+        "--remote-debugging-address=127.0.0.1",
+        "--remote-allow-origins=*",
+        "--no-first-run", "--no-default-browser-check",
+        "--password-store=basic",
+        "--disable-session-crashed-bubble", "--disable-infobars",
+        "--start-maximized",
+        f"--user-data-dir={PROFILE_DIR}",
+        "about:blank",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        env=chrome_env,
+    )
+
+    # Wait for CDP port to be ready (async-safe socket poll)
+    for _ in range(30):
+        try:
+            s = socket.create_connection(("127.0.0.1", CDP_PORT), timeout=0.5)
+            s.close()
+            break
+        except OSError:
+            await asyncio.sleep(1)
+
+    # Brief settle time for Chrome's startup sequence
+    await asyncio.sleep(2)
+
+
 class Session:
     def __init__(self):
         self.pw = None
@@ -123,7 +255,7 @@ class Session:
         """Attach to the analyst's real Chrome over CDP, retrying until it's up."""
         if self.browser is not None:
             try:
-                _ = self.browser.contexts  # cheap liveness probe
+                _ = self.browser.contexts
                 return
             except Exception:
                 self.browser = None
@@ -135,7 +267,14 @@ class Session:
                 self.browser = await self.pw.chromium.connect_over_cdp(CDP_URL)
                 self.context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
                 await self.context.add_init_script(WEBGL_FIX_JS)
+                await self.context.add_init_script(WINDOWS_UA_JS)
                 await self.context.add_init_script(HOOKS_JS)
+                await self.context.set_extra_http_headers({
+                    "User-Agent": WINDOWS_UA,
+                    "Sec-CH-UA": '"Chromium";v="138", "Google Chrome";v="138", "Not)A;Brand";v="99"',
+                    "Sec-CH-UA-Mobile": "?0",
+                    "Sec-CH-UA-Platform": '"Windows"',
+                })
                 self.context.on("page", self._wire_page)
                 for pg in self.context.pages:
                     self._wire_page(pg)
@@ -147,8 +286,22 @@ class Session:
 
     def _wire_page(self, page):
         try:
+            asyncio.ensure_future(self._apply_windows_ua(page))
             page.on("response", lambda resp: self._on_response(resp))
             page.on("websocket", lambda ws: self._on_ws(ws))
+        except Exception:
+            pass
+
+    async def _apply_windows_ua(self, page):
+        """CDP Emulation.setUserAgentOverride — controls Sec-CH-UA-Platform at protocol level."""
+        try:
+            cdp = await self.context.new_cdp_session(page)
+            await cdp.send("Emulation.setUserAgentOverride", {
+                "userAgent": WINDOWS_UA,
+                "platform": "Win32",
+                "userAgentMetadata": WINDOWS_UA_META,
+            })
+            await cdp.detach()
         except Exception:
             pass
 
@@ -272,6 +425,9 @@ async def health():
 
 async def _begin(url: str, case_dir: str, case_id: str):
     async with S.lock:
+        # AnyRun model: wipe Chrome completely before every investigation so each
+        # session starts with zero cookies, cache, and fingerprint history.
+        await _restart_chrome_fresh()
         await S.ensure_browser()
         S.reset()
         S.case_id = case_id
@@ -284,7 +440,7 @@ async def _begin(url: str, case_dir: str, case_id: str):
         try:
             resp = await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             return page, (resp.status if resp else None)
-        except Exception as e:
+        except Exception:
             return page, None
 
 
@@ -377,7 +533,7 @@ async def session_status():
 
 
 async def _auto_finalize():
-    """Auto-end the session after SESSION_TIMEOUT_S seconds so stale sessions never block new scans."""
+    """Auto-end the session after SESSION_TIMEOUT_S seconds."""
     await asyncio.sleep(SESSION_TIMEOUT_S)
     if not S.active:
         return
@@ -411,7 +567,7 @@ async def session_finalize():
     summ = S.summary()
     if S.case_dir:
         (S.case_dir / "browser" / "visit_summary.json").write_text(json.dumps(summ, default=str, indent=2))
-    S.active = False  # session finalized; a new one may start
+    S.active = False
     return {"ok": True, **summ}
 
 
@@ -424,7 +580,7 @@ async def session_flows(case_id: str = ""):
 
 @app.post("/session/abort")
 async def session_abort():
-    """Force-clear the active session without running the pipeline."""
+    """Clear the active session immediately. Chrome is wiped fresh on the next session start."""
     global _timeout_task
     if _timeout_task and not _timeout_task.done():
         _timeout_task.cancel()
@@ -435,4 +591,4 @@ async def session_abort():
         await asyncio.wait_for(page.goto("about:blank"), timeout=5)
     except Exception:
         pass
-    return {"ok": True, "msg": "session cleared"}
+    return {"ok": True, "msg": "session cleared — Chrome will be wiped fresh on next session start"}

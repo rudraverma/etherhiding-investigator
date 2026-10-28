@@ -23,6 +23,14 @@ RUN chmod +x /dockerstartup/custom_startup.sh \
     && chown -R 1000:0 /opt/etherhawk \
     && chmod -R u+rwX,g+rwX /opt/etherhawk
 
-# Do NOT override kasm's ENTRYPOINT/CMD — it boots the desktop and then runs
+# Fix noVNC session-timeout TypeError: UI.rfb is undefined before any viewer connects.
+# Without this guard the setInterval fires, reads UI.rfb.lastActiveAt on undefined, throws,
+# and the catch block shows a blocking modal over the analyst's desktop.
+RUN grep -q 'UI.rfb.lastActiveAt) return' /usr/share/kasmvnc/www/dist/main.bundle.js \
+    || sed -i \
+       's/UI\._sessionTimeoutInterval = setInterval(function () {/UI._sessionTimeoutInterval = setInterval(function () { if (!UI.rfb || !UI.rfb.lastActiveAt) return;/' \
+       /usr/share/kasmvnc/www/dist/main.bundle.js
+
+# Do NOT override kasm's ENTRYPOINT/CMD -- it boots the desktop and then runs
 # /dockerstartup/custom_startup.sh, which launches Chrome + the capture service.
 USER 1000

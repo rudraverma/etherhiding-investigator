@@ -1,14 +1,14 @@
 services:
 
-  # ── Dashboard (CyberHawk-branded React SPA) ──────────────────────────────────
+  # â”€â”€ Dashboard (CyberHawk-branded React SPA) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   etherhawk-ui:
     build:
       context: ./ui
       dockerfile: Dockerfile
-    container_name: etherhawk-ui
+    container_name: etherhawk-ui-v2
     restart: unless-stopped
     ports:
-      - "${UI_PORT:-8080}:80"          # dashboard — put behind VPN/tunnel; token-guarded
+      - "${UI_PORT:-8080}:80"          # dashboard â€” put behind VPN/tunnel; token-guarded
     environment:
       # Used only to build the kasm Basic-Auth header for the noVNC proxy at start.
       - KASM_PASSWORD=${KASM_PASSWORD:-changeme-kasm}
@@ -18,12 +18,12 @@ services:
     networks:
       - etherhawk-net
 
-  # ── Orchestrator API (deterministic pipeline, verdict engine, SQLite) ─────────
+  # â”€â”€ Orchestrator API (deterministic pipeline, verdict engine, SQLite) â”€â”€â”€â”€â”€â”€â”€â”€â”€
   etherhawk-api:
     build:
       context: ./api
       dockerfile: Dockerfile
-    container_name: etherhawk-api
+    container_name: etherhawk-api-v2
     restart: unless-stopped
     ports:
       - "127.0.0.1:${API_PORT:-8094}:8000"   # localhost only; the UI proxies /api
@@ -48,7 +48,7 @@ services:
       - etherhawk-net          # reach interactive browser + deobf + ui
       - etherhawk-internal     # reach the sandbox (no-egress net)
 
-  # ── Interactive REAL Chrome (noVNC) + CDP capture ─────────────────────────────
+  # â”€â”€ Interactive REAL Chrome (noVNC) + CDP capture â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   # Analyst-drivable real Google Chrome. Keeps its genuine TLS fingerprint (no
   # TLS-terminating proxy), which is what gets past server-side anti-analysis
   # cloaking. Egresses via the host's residential public IP. Serves BOTH the
@@ -58,7 +58,7 @@ services:
     build:
       context: ./interactive
       dockerfile: Dockerfile
-    container_name: etherhawk-interactive
+    container_name: etherhawk-interactive-v2
     restart: unless-stopped
     shm_size: "1gb"
     environment:
@@ -66,30 +66,30 @@ services:
       - CDP_PORT=9222
       - MITM_FLOWS_PATH=${MITM_FLOWS_PATH:-/workspace/_mitm/flows.jsonl}
     ports:
-      - "${KASM_PORT:-6901}:6901"      # noVNC desktop (HTTPS, self-signed) — the analyst view
+      - "${KASM_PORT:-6901}:6901"      # noVNC desktop (HTTPS, self-signed) â€” the analyst view
     volumes:
       - etherhawk-data:/workspace
     networks:
       - etherhawk-net                  # egress via host public IP + reachable by API
 
-  # ── Deobfuscator (JS/PS beautify + IOC extraction) ────────────────────────────
+  # â”€â”€ Deobfuscator (JS/PS beautify + IOC extraction) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   etherhawk-deobf:
     build:
       context: ./deobfuscator
       dockerfile: Dockerfile
-    container_name: etherhawk-deobf
+    container_name: etherhawk-deobf-v2
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     networks:
       - etherhawk-net
 
-  # ── Isolated JS sandbox (NO network egress — internal net only) ───────────────
+  # â”€â”€ Isolated JS sandbox (NO network egress â€” internal net only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   etherhawk-sandbox:
     build:
       context: ./sandbox
       dockerfile: Dockerfile
-    container_name: etherhawk-sandbox
+    container_name: etherhawk-sandbox-v2
     restart: unless-stopped
     read_only: true
     cap_drop:
@@ -99,7 +99,7 @@ services:
     tmpfs:
       - /tmp:size=64m,noexec
     networks:
-      - etherhawk-internal     # internal:true → cannot reach the internet
+      - etherhawk-internal     # internal:true â†’ cannot reach the internet
 
 volumes:
   etherhawk-data:

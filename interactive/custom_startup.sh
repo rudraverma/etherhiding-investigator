@@ -1,44 +1,63 @@
 #!/usr/bin/env bash
-###############################################################################
-# EtherHawk custom startup for kasmweb/chrome.
-#
-# kasmweb runs this hook (/dockerstartup/custom_startup.sh) after the desktop is
-# up. We (1) launch Google Chrome ourselves with remote debugging enabled so the
-# capture service can attach over CDP, on the Kasm display the analyst sees, and
-# (2) start the capture/control service. Chrome keeps its genuine TLS fingerprint
-# (no proxy), which is what lets us past server-side anti-analysis cloaking.
-###############################################################################
+# EtherHawk custom startup — launched by KasmVNC's vnc_startup.sh in background.
+# MUST NOT exit early: KasmVNC records this bash PID in KASM_PROCS['custom_startup']
+# and checks it every 3 s; an early exit produces "Unknown Service: custom_startup" spam.
 set -u
 
 export DISPLAY="${DISPLAY:-:1}"
 CDP_PORT="${CDP_PORT:-9222}"
+CHROME_BIN="/opt/google/chrome/google-chrome"
 PROFILE_DIR="/home/kasm-user/.config/eh-chrome"
+
 mkdir -p "$PROFILE_DIR" /workspace/_mitm 2>/dev/null || true
-# Ensure the flows file is writable by the capture service (uid 1000 kasm-user)
-touch /workspace/_mitm/flows.jsonl && chmod 666 /workspace/_mitm/flows.jsonl && chmod 777 /workspace/_mitm 2>/dev/null || true
+touch /workspace/_mitm/flows.jsonl \
+  && chmod 666 /workspace/_mitm/flows.jsonl \
+  && chmod 777 /workspace/_mitm 2>/dev/null || true
 
-# Stop any chrome the base image auto-started, so ours (with remote debugging)
-# is the one the analyst sees and the one we attach to.
-pkill -f "chrome" 2>/dev/null || true
-sleep 2
+CHROME_PID=""
 
-CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || echo /usr/bin/google-chrome)"
+if pgrep -f "$CHROME_BIN" >/dev/null 2>&1; then
+  echo "EtherHawk: Chrome already running -- skipping start." >&2
+  CHROME_PID="$(pgrep -f "$CHROME_BIN" | head -1)"
+else
+  # Kill any stale Chrome processes (zygote, GPU, crashpad, etc.) from previous runs.
+  # Pattern 'opt/google/chrome' (no leading /) matches google-chrome AND chrome children.
+  # NEVER pkill 'chromium' -- Xvnc cmdline has '-DLP_ClipTypes chromium/x-web-custom-data'
+  # and pkill -f chromium would kill the VNC server, crashing the container.
+  pkill -9 -f 'opt/google/chrome' 2>/dev/null || true
+  sleep 2
+  rm -rf "$PROFILE_DIR"
+  mkdir -p "$PROFILE_DIR"
 
-"$CHROME_BIN" \
-  --remote-debugging-port="${CDP_PORT}" \
-  --remote-debugging-address=127.0.0.1 \
-  --remote-allow-origins=* \
-  --no-first-run --no-default-browser-check \
-  --password-store=basic \
-  --disable-session-crashed-bubble --disable-infobars \
-  --start-maximized \
-  --user-data-dir="$PROFILE_DIR" \
-  "about:blank" >/tmp/eh-chrome.log 2>&1 &
+  "$CHROME_BIN" \
+    --no-sandbox \
+    --ignore-gpu-blocklist \
+    --disable-blink-features=AutomationControlled \
+    --remote-debugging-port="${CDP_PORT}" \
+    --remote-debugging-address=127.0.0.1 \
+    --remote-allow-origins='*' \
+    --no-first-run --no-default-browser-check \
+    --password-store=basic \
+    --disable-session-crashed-bubble --disable-infobars \
+    --start-maximized \
+    --user-data-dir="$PROFILE_DIR" \
+    about:blank >/tmp/eh-chrome.log 2>&1 &
+  CHROME_PID=$!
+fi
 
-# Start the EtherHawk capture/control service (attaches to Chrome over CDP).
-cd /opt/etherhawk || exit 0
-/opt/etherhawk/venv/bin/python -m uvicorn capture:app --host 0.0.0.0 --port 9001 --no-access-log \
-  >/tmp/eh-capture.log 2>&1 &
+if ! pgrep -f 'uvicorn capture:app' >/dev/null 2>&1; then
+  cd /opt/etherhawk
+  /opt/etherhawk/venv/bin/python -m uvicorn capture:app \
+    --host 0.0.0.0 --port 9001 --no-access-log \
+    >/tmp/eh-capture.log 2>&1 &
+fi
 
-# Return so kasm's session supervisor keeps running the desktop.
-exit 0
+# Block here so the KasmVNC watchdog sees this process alive and stops logging
+# "Unknown Service: custom_startup" every 3 s.
+# wait works for our own child; the pgrep loop covers the already-running case.
+if [ -n "${CHROME_PID:-}" ]; then
+  wait "$CHROME_PID" 2>/dev/null || true
+fi
+while pgrep -f "$CHROME_BIN" >/dev/null 2>&1; do
+  sleep 10
+done
