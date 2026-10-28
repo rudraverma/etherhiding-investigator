@@ -1,0 +1,19 @@
+﻿# Override: rename all containers with -v2 suffix so v1 and v2 can run side by side.
+# Also tune kasmweb/chrome for analyst use: audio disabled (saves 50-100 kbps
+# on the WebSocket), frame rate capped at 24fps. Resolution is intentionally NOT
+# forced here — noVNC resize=remote tells kasmweb to match the client viewport
+# dynamically, so the VNC desktop exactly fits the iframe with no overflow/cut-off.
+services:
+  etherhawk-ui:
+    container_name: etherhawk-ui-v2
+  etherhawk-api:
+    container_name: etherhawk-api-v2
+  etherhawk-interactive:
+    container_name: etherhawk-interactive-v2
+    environment:
+      - MAX_FRAME_RATE=24
+      - DISABLE_AUDIO=1
+  etherhawk-deobf:
+    container_name: etherhawk-deobf-v2
+  etherhawk-sandbox:
+    container_name: etherhawk-sandbox-v2

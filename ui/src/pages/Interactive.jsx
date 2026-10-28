@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Crosshair, Activity, Network, StopCircle } from 'lucide-react';
 import { C, HudFrame, ExecButton, IndicatorBadge } from '../components/CyberHawkUI.jsx';
@@ -43,11 +43,11 @@ export default function Interactive() {
   }, [caseId]);
 
   // Build the noVNC URL from the runtime kasm password (handed to the authed
-  // client by the API) — never hardcoded in source.
-  const [kasmUrl, setKasmUrl] = useState('/novnc/?autoconnect=1');
+  // client by the API) Ã¢â‚¬â€ never hardcoded in source.
+  const [kasmUrl, setKasmUrl] = useState('/novnc/?autoconnect=1&quality=4&compression=7&resize=remote');
   useEffect(() => {
     api.config()
-      .then((r) => setKasmUrl(`/novnc/?password=${encodeURIComponent(r.kasm_password || '')}&autoconnect=1`))
+      .then((r) => setKasmUrl(`/novnc/?password=${encodeURIComponent(r.kasm_password || '')}&autoconnect=1&quality=4&compression=7&resize=remote`))
       .catch(() => {});
   }, []);
 
@@ -112,9 +112,9 @@ export default function Interactive() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      <HudFrame title="Interactive Detonation" subtitle="REAL CHROME · REAL TLS">
+      <HudFrame title="Interactive Detonation" subtitle="REAL CHROME Ã‚Â· REAL TLS">
         <p style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.74rem', color: '#88aa88', lineHeight: 1.6, marginBottom: '0.9rem' }}>
-          Open the target in a real analyst-driven Chrome (below). Browse it like a normal user —
+          Open the target in a real analyst-driven Chrome (below). Browse it like a normal user Ã¢â‚¬â€
           move the mouse, click, solve any CAPTCHA/QR, trigger the ClickFix lure. The browser keeps
           its genuine TLS fingerprint, so server-side cloaking can't tell it from a victim. Capture
           runs live; hit <b>Analyze</b> when the chain has fired.
@@ -132,10 +132,10 @@ export default function Interactive() {
           <ExecButton onClick={start} loading={busy} label="OPEN IN BROWSER" loadingLabel="OPENING..." icon={Crosshair} />
         </div>
 
-        {/* 409 conflict — offer stop+retry */}
+        {/* 409 conflict Ã¢â‚¬â€ offer stop+retry */}
         {conflict && (
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <IndicatorBadge type="warning" message="Session conflict — a previous session is still active." />
+            <IndicatorBadge type="warning" message="Session conflict Ã¢â‚¬â€ a previous session is still active." />
             <button onClick={() => stop(true)} disabled={stopping}
               style={{ ...btnBase, background: `linear-gradient(135deg,${C.red}cc,${C.red}88)`, border: `1px solid ${C.red}`, color: '#110000' }}>
               <StopCircle size={13} style={{ marginRight: 4 }} />{stopping ? 'STOPPING...' : 'FORCE STOP & RETRY'}
@@ -209,8 +209,8 @@ export default function Interactive() {
         </HudFrame>
       )}
 
-      {/* noVNC desktop — STOP SESSION button sits just above the iframe */}
-      <HudFrame title="Analyst Browser (noVNC)" subtitle="auto-connect · analyst view">
+      {/* noVNC desktop Ã¢â‚¬â€ STOP SESSION button sits just above the iframe */}
+      <HudFrame title="Analyst Browser (noVNC)" subtitle="auto-connect Ã‚Â· analyst view">
         {!caseId && (
           <div style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
             <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.65rem', color: '#446644' }}>
