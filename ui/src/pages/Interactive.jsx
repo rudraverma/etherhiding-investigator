@@ -185,7 +185,7 @@ export default function Interactive() {
                 <tbody>
                   {[...flows].reverse().map((f, i) => {
                     const isRpc = f.is_blockchain_rpc;
-                    const isC2  = f.is_jsonp_c2 || f.is_jsrepo;
+                    const isC2  = f.is_jsonp_c2 || f.is_jsrepo || f.is_clickfix_c2;
                     const rowCol = isRpc ? C.red : isC2 ? C.gold : C.green;
                     return (
                       <tr key={i} style={{ borderBottom: `1px solid #112211`, background: isRpc ? '#1a0000' : isC2 ? '#1a1000' : 'transparent' }}>
@@ -197,6 +197,7 @@ export default function Interactive() {
                         <td style={{ padding: '0.2rem 0.4rem', whiteSpace: 'nowrap' }}>
                           {isRpc && <span style={{ color: C.red, marginRight: 4 }}>CHAIN</span>}
                           {f.is_jsonp_c2 && <span style={{ color: C.gold, marginRight: 4 }}>C2</span>}
+                          {f.is_clickfix_c2 && !f.is_jsonp_c2 && <span style={{ color: C.gold, marginRight: 4 }}>CLICKFIX</span>}
                           {f.is_jsrepo && <span style={{ color: C.gold, marginRight: 4 }}>JSREPO</span>}
                         </td>
                       </tr>

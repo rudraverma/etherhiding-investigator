@@ -118,6 +118,17 @@ BLOCKCHAIN_RPC_METHODS = {"eth_call", "eth_getstorageat", "eth_getcode", "eth_ge
                           "eth_blocknumber", "eth_chainid", "net_version", "eth_sendrawtransaction"}
 DECISIVE = {"eth_call", "eth_getstorageat", "eth_getlogs"}
 CLICKFIX_RE = re.compile(r"handleCmdCheck|Win\s*\+\s*R|Ctrl\s*\+\s*V|powershell|clipboard", re.I)
+# URL-based ClickFix C2 detection — two common variants:
+#   JSONP: ?callback=handleCmdCheck_TIMESTAMP  (Win+R / Ctrl+V lure)
+#   Grid:  /click_grid? / /click_visit?        (grid/button lure, e.g. ubbrobccheck20.cc)
+CLICKFIX_URL_RE = re.compile(
+    r"callback=handleCmdCheck"
+    r"|/click_grid[?]"
+    r"|/click_visit[?]",
+    re.I,
+)
+# Skip Chrome-internal browser noise from the flow table
+CHROME_INTERNAL_RE = re.compile(r"^chrome(-untrusted)?://", re.I)
 
 app = FastAPI(title="EtherHawk Interactive Browser")
 
@@ -328,6 +339,9 @@ class Session:
                     body = None
             rpc = _parse_rpc(body)
             url = req.url
+            # Skip Chrome internal browser pages — they are startup noise, not investigation traffic
+            if CHROME_INTERNAL_RE.search(url):
+                return
             host = re.sub(r"^https?://", "", url).split("/")[0].split(":")[0]
             rec = {
                 "ts": _now(), "epoch": time.time(), "transport": "http",
@@ -337,6 +351,7 @@ class Session:
                 "resp_content_type": (resp.headers or {}).get("content-type", ""),
                 "is_blockchain_rpc": bool(rpc), "rpc_calls": rpc,
                 "is_jsonp_c2": bool(re.search(r"callback=handleCmdCheck", url, re.I)),
+                "is_clickfix_c2": bool(CLICKFIX_URL_RE.search(url)),
                 "is_jsrepo": "/jsrepo" in url.lower(),
             }
             if rpc and body and len(body) < 8192:
@@ -344,6 +359,8 @@ class Session:
             if rpc:
                 for c in rpc:
                     self.rpc.append({"methods": [c], "where": "network:" + url})
+            if rec["is_clickfix_c2"]:
+                S.clickfix = True
             self._record(rec)
         except Exception:
             pass
