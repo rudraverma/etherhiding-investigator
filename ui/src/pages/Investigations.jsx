@@ -1,226 +1,394 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, ChevronDown, ChevronRight, FolderOpen, Folder } from 'lucide-react';
+import {
+  FolderOpen, Star, ChevronDown, ChevronRight,
+  Search, Calendar, Archive, Shield, AlertTriangle, CheckCircle, HelpCircle,
+} from 'lucide-react';
 import { C, HudFrame } from '../components/CyberHawkUI.jsx';
 import { api } from '../api.js';
 
+const FAV_KEY = 'eh_favourites';
+const MONTHS  = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+                  'July', 'August', 'September', 'October', 'November', 'December'];
+
 const VERDICT_COLOR = {
-  COMPROMISED_ETHERHIDING: C.red,
-  SUSPECTED_ETHERHIDING: C.orange,
-  NO_ETHERHIDING_DETECTED: C.green,
-  INCONCLUSIVE: C.yellow,
+  COMPROMISED_ETHERHIDING: '#ff4444',
+  SUSPECTED_ETHERHIDING:   '#ff8800',
+  NO_ETHERHIDING_DETECTED: '#44cc44',
+  INCONCLUSIVE:            '#cccc44',
 };
 
-const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const VERDICT_ICON = {
+  COMPROMISED_ETHERHIDING: <Shield size={11} color="#ff4444" />,
+  SUSPECTED_ETHERHIDING:   <AlertTriangle size={11} color="#ff8800" />,
+  NO_ETHERHIDING_DETECTED: <CheckCircle size={11} color="#44cc44" />,
+  INCONCLUSIVE:            <HelpCircle size={11} color="#cccc44" />,
+};
 
-function parseDate(caseId) {
-  const m = caseId.match(/^(\d{4})-(\d{2})-(\d{2})\//);
-  if (!m) return { year: '????', month: '??', day: '??', monthName: '????' };
-  return {
-    year: m[1],
-    month: m[2],
-    day: m[3],
-    monthName: MONTH_NAMES[parseInt(m[2], 10) - 1] || m[2],
-  };
+function loadFavs() {
+  try { return JSON.parse(localStorage.getItem(FAV_KEY) || '[]'); }
+  catch { return []; }
+}
+function saveFavs(f) {
+  try { localStorage.setItem(FAV_KEY, JSON.stringify(f)); } catch {}
 }
 
-function caseName(caseId) {
-  return caseId.replace(/^\d{4}-\d{2}-\d{2}\//, '');
+function parseCaseId(id) {
+  const m = id.match(/^(\d{4})-(\d{2})-(\d{2})\//);
+  if (!m) return { year: '????', month: '00', day: '00' };
+  return { year: m[1], month: m[2], day: m[3] };
 }
 
-function groupCases(rows) {
-  const tree = {};
-  for (const r of rows) {
-    const { year, month, day, monthName } = parseDate(r.id);
-    if (!tree[year]) tree[year] = {};
-    const mk = `${month}|${monthName}`;
-    if (!tree[year][mk]) tree[year][mk] = {};
-    if (!tree[year][mk][day]) tree[year][mk][day] = [];
-    tree[year][mk][day].push(r);
-  }
-  return tree;
-}
-
-const td = { padding: '0.35rem 0.6rem', borderBottom: `1px solid ${C.border}`, whiteSpace: 'nowrap' };
-const openBtn = { marginRight: '0.4rem', background: 'transparent', border: `1px solid ${C.border}`, color: C.cyan, borderRadius: '0.3rem', padding: '0.18rem 0.45rem', cursor: 'pointer', fontFamily: "'Share Tech Mono', monospace", fontSize: '0.62rem' };
-
-function CaseRow({ r, nav, depth = 0 }) {
-  return (
-    <tr style={{ color: '#aaccaa' }}>
-      <td style={{ ...td, paddingLeft: `${0.6 + depth * 0.5}rem` }}>
-        <span style={{ color: '#55aa55', marginRight: '0.4rem' }}>●</span>
-        {caseName(r.id)}
-      </td>
-      <td style={td}>{r.domain}</td>
-      <td style={td}>{r.status}</td>
-      <td style={{ ...td, color: VERDICT_COLOR[r.verdict] || '#aaccaa', fontWeight: 700 }}>{r.verdict || '—'}</td>
-      <td style={td}>{r.confidence != null ? `${r.confidence}%` : '—'}</td>
-      <td style={td}>{r.c2_count || 0}</td>
-      <td style={td}>
-        <button onClick={() => nav(`/report?id=${encodeURIComponent(r.id)}`)} style={openBtn}>REPORT</button>
-        <button onClick={() => nav(`/live?id=${encodeURIComponent(r.id)}`)} style={openBtn}>LIVE</button>
-      </td>
-    </tr>
-  );
-}
-
-function DaySection({ day, cases, nav, expanded, toggle }) {
-  return (
-    <>
-      <tr
-        onClick={toggle}
-        style={{ cursor: 'pointer', color: C.cyan, background: 'rgba(0,200,180,0.04)' }}
-      >
-        <td colSpan={7} style={{ ...td, paddingLeft: '3rem' }}>
-          {expanded ? <ChevronDown size={11} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} /> : <ChevronRight size={11} style={{ marginRight: '0.4rem', verticalAlign: 'middle' }} />}
-          <span style={{ fontSize: '0.65rem', letterSpacing: '0.08em' }}>DAY {day}</span>
-          <span style={{ color: '#557755', marginLeft: '0.6rem', fontSize: '0.62rem' }}>{cases.length} case{cases.length !== 1 ? 's' : ''}</span>
-        </td>
-      </tr>
-      {expanded && cases.map((r) => <CaseRow key={r.id} r={r} nav={nav} depth={3} />)}
-    </>
-  );
-}
-
-function MonthSection({ monthKey, days, nav, expanded, toggle, dayStates, toggleDay }) {
-  const [, monthName] = monthKey.split('|');
-  const total = Object.values(days).reduce((s, a) => s + a.length, 0);
-  return (
-    <>
-      <tr
-        onClick={toggle}
-        style={{ cursor: 'pointer', color: C.gold, background: 'rgba(180,160,0,0.05)' }}
-      >
-        <td colSpan={7} style={{ ...td, paddingLeft: '1.8rem' }}>
-          {expanded
-            ? <FolderOpen size={13} style={{ marginRight: '0.5rem', verticalAlign: 'middle', color: C.gold }} />
-            : <Folder size={13} style={{ marginRight: '0.5rem', verticalAlign: 'middle', color: C.gold }} />}
-          <span style={{ fontSize: '0.68rem', letterSpacing: '0.1em' }}>{monthName.toUpperCase()}</span>
-          <span style={{ color: '#888855', marginLeft: '0.7rem', fontSize: '0.62rem' }}>{total} case{total !== 1 ? 's' : ''}</span>
-        </td>
-      </tr>
-      {expanded && Object.entries(days)
-        .sort(([a], [b]) => Number(b) - Number(a))
-        .map(([day, cases]) => (
-          <DaySection
-            key={day}
-            day={day}
-            cases={cases}
-            nav={nav}
-            expanded={!!dayStates[`${monthKey}|${day}`]}
-            toggle={() => toggleDay(`${monthKey}|${day}`)}
-          />
-        ))
-      }
-    </>
-  );
-}
-
-function YearSection({ year, months, nav, expanded, toggle, monthStates, toggleMonth, dayStates, toggleDay }) {
-  const total = Object.values(months).reduce((s, d) => s + Object.values(d).reduce((s2, a) => s2 + a.length, 0), 0);
-  return (
-    <>
-      <tr
-        onClick={toggle}
-        style={{ cursor: 'pointer', color: '#cc9944', background: 'rgba(160,120,0,0.07)' }}
-      >
-        <td colSpan={7} style={{ ...td, paddingLeft: '0.4rem', fontSize: '0.78rem', letterSpacing: '0.12em', fontWeight: 700 }}>
-          {expanded
-            ? <ChevronDown size={13} style={{ marginRight: '0.5rem', verticalAlign: 'middle' }} />
-            : <ChevronRight size={13} style={{ marginRight: '0.5rem', verticalAlign: 'middle' }} />}
-          {year}
-          <span style={{ color: '#886633', marginLeft: '0.7rem', fontSize: '0.62rem', fontWeight: 400 }}>{total} total</span>
-        </td>
-      </tr>
-      {expanded && Object.entries(months)
-        .sort(([a], [b]) => Number(b.split('|')[0]) - Number(a.split('|')[0]))
-        .map(([mk, days]) => (
-          <MonthSection
-            key={mk}
-            monthKey={mk}
-            days={days}
-            nav={nav}
-            expanded={!!monthStates[`${year}|${mk}`]}
-            toggle={() => toggleMonth(`${year}|${mk}`)}
-            dayStates={dayStates}
-            toggleDay={toggleDay}
-          />
-        ))
-      }
-    </>
-  );
-}
+function caseSlug(id) { return id.replace(/^\d{4}-\d{2}-\d{2}\//, ''); }
 
 export default function Investigations() {
-  const nav = useNavigate();
-  const [rows, setRows] = useState([]);
-  const [busy, setBusy] = useState(true);
-  const [yearStates, setYearStates] = useState({});
-  const [monthStates, setMonthStates] = useState({});
-  const [dayStates, setDayStates] = useState({});
+  const navigate = useNavigate();
+  const [cases,   setCases]   = useState([]);
+  const [tab,     setTab]     = useState('all');
+  const [favs,    setFavs]    = useState(loadFavs);
+  const [search,  setSearch]  = useState('');
+  const [expanded, setExpanded] = useState({ years: {}, months: {}, days: {} });
 
-  const load = async () => {
-    setBusy(true);
+  const reload = useCallback(async () => {
     try {
       const r = await api.cases();
-      const cases = r.cases || [];
-      setRows(cases);
-      // Auto-expand the most recent year, month, day
-      if (cases.length) {
-        const first = cases[0];
-        const { year, month, day, monthName } = parseDate(first.id);
-        const mk = `${month}|${monthName}`;
-        setYearStates({ [year]: true });
-        setMonthStates({ [`${year}|${mk}`]: true });
-        setDayStates({ [`${mk}|${day}`]: true });
-      }
-    } catch {} finally { setBusy(false); }
+      const list = r.cases || [];
+      setCases(list);
+      const now = new Date();
+      const y = String(now.getFullYear());
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      setExpanded(prev => ({
+        ...prev,
+        years:  { ...prev.years,  [y]: true },
+        months: { ...prev.months, [`${y}-${m}`]: true },
+      }));
+    } catch {}
+  }, []);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const isFav = (id) => favs.some(f => f.id === id);
+  const toggleFav = (c) => {
+    setFavs(prev => {
+      const next = isFav(c.id)
+        ? prev.filter(f => f.id !== c.id)
+        : [{ ...c, addedAt: new Date().toISOString() }, ...prev];
+      saveFavs(next);
+      return next;
+    });
   };
 
-  useEffect(() => { load(); }, []);
+  const toggle = (type, key) => {
+    setExpanded(prev => {
+      const cur  = prev[type][key];
+      const next = cur === undefined ? false : !cur;
+      return { ...prev, [type]: { ...prev[type], [key]: next } };
+    });
+  };
 
-  const tree = groupCases(rows);
+  // Build year > month > day > cases tree
+  const grouped = {};
+  cases.forEach(c => {
+    const { year, month, day } = parseCaseId(c.id);
+    if (!grouped[year])             grouped[year]             = {};
+    if (!grouped[year][month])      grouped[year][month]      = {};
+    if (!grouped[year][month][day]) grouped[year][month][day] = [];
+    grouped[year][month][day].push(c);
+  });
 
-  const toggle = (setter, key) => setter(s => ({ ...s, [key]: !s[key] }));
+  const q = search.toLowerCase();
+  const filter = (list) => q
+    ? list.filter(c => c.id.toLowerCase().includes(q) || (c.domain || '').toLowerCase().includes(q) || (c.verdict || '').toLowerCase().includes(q))
+    : list;
+
+  const favList  = favs.slice().sort((a, b) => b.addedAt.localeCompare(a.addedAt));
+  const total    = cases.length;
+  const yearCount = Object.keys(grouped).length;
 
   return (
-    <HudFrame title="Investigations" subtitle={`${rows.length} CASE(S)`}>
-      <button onClick={load} style={{ marginBottom: '0.75rem', display: 'inline-flex', gap: '0.4rem', alignItems: 'center', background: 'transparent', border: `1px solid ${C.border}`, color: '#88aa88', borderRadius: '0.35rem', padding: '0.35rem 0.7rem', cursor: 'pointer', fontFamily: "'Share Tech Mono', monospace", fontSize: '0.7rem' }}>
-        <RefreshCw size={12} className={busy ? 'spin-fast' : ''} /> REFRESH
-      </button>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: "'Share Tech Mono', monospace", fontSize: '0.72rem' }}>
-          <thead>
-            <tr style={{ color: C.gold, textAlign: 'left' }}>
-              {['Case', 'Domain', 'Status', 'Verdict', 'Conf', 'C2', ''].map((h) => (
-                <th key={h} style={{ padding: '0.4rem 0.6rem', borderBottom: `1px solid ${C.border}`, letterSpacing: '0.1em' }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(tree)
-              .sort(([a], [b]) => Number(b) - Number(a))
-              .map(([year, months]) => (
-                <YearSection
-                  key={year}
-                  year={year}
-                  months={months}
-                  nav={nav}
-                  expanded={!!yearStates[year]}
-                  toggle={() => toggle(setYearStates, year)}
-                  monthStates={monthStates}
-                  toggleMonth={(k) => toggle(setMonthStates, k)}
-                  dayStates={dayStates}
-                  toggleDay={(k) => toggle(setDayStates, k)}
-                />
-              ))
-            }
-            {!rows.length && !busy && (
-              <tr><td colSpan={7} style={{ ...td, color: '#557755' }}>No investigations yet. Submit a URL to begin.</td></tr>
-            )}
-          </tbody>
-        </table>
+    <div className="cyber-fade-in" style={{ maxWidth: '1100px', margin: '0 auto' }}>
+
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+        <Archive size={22} color={C.green} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontFamily: "'Orbitron', monospace", fontWeight: 900, fontSize: '1rem', color: C.green, letterSpacing: '0.1em' }}>
+            CASE ARCHIVE
+          </div>
+          <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.6rem', color: '#336633' }}>
+            {total} investigations · {yearCount} year{yearCount !== 1 ? 's' : ''}
+          </div>
+        </div>
+        <div style={{ position: 'relative' }}>
+          <Search size={11} style={{ position: 'absolute', left: '0.5rem', top: '50%', transform: 'translateY(-50%)', color: '#336633', pointerEvents: 'none' }} />
+          <input
+            value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="SEARCH CASES..."
+            style={{
+              paddingLeft: '1.6rem', paddingRight: '0.6rem', height: '30px',
+              background: C.greenBg || 'rgba(0,30,0,0.4)', border: `1px solid ${C.greenBdr || C.border}`,
+              borderRadius: '0.25rem', color: C.green,
+              fontFamily: "'Share Tech Mono', monospace", fontSize: '0.6rem', outline: 'none', width: '200px',
+            }}
+          />
+        </div>
       </div>
-    </HudFrame>
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1rem', borderBottom: `1px solid ${C.border}`, paddingBottom: '0.5rem' }}>
+        {[
+          { id: 'all',  label: 'ALL CASES',   badge: total },
+          { id: 'favs', label: 'FAVOURITES',  badge: favs.length, icon: <Star size={11} fill={tab === 'favs' ? C.gold : 'none'} color={C.gold} /> },
+        ].map(({ id, label, badge, icon }) => (
+          <button key={id} onClick={() => setTab(id)} style={{
+            padding: '0.35rem 1rem', border: `1px solid ${tab === id ? C.greenBdr || C.border : 'transparent'}`,
+            borderRadius: '0.25rem', background: tab === id ? (C.greenBg || 'rgba(0,30,0,0.4)') : 'transparent',
+            color: tab === id ? C.green : '#336633', cursor: 'pointer',
+            fontFamily: "'Share Tech Mono', monospace", fontSize: '0.65rem', letterSpacing: '0.1em',
+            display: 'flex', alignItems: 'center', gap: '0.4rem',
+          }}>
+            {icon}
+            {label}
+            <span style={{ background: `${C.green}22`, color: C.green, padding: '0 5px', borderRadius: '8px', fontSize: '0.55rem' }}>{badge}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* All Cases */}
+      {tab === 'all' && (
+        <div>
+          {Object.keys(grouped).sort((a, b) => b - a).map(year => {
+            const yearAll      = Object.values(grouped[year]).flatMap(m => Object.values(m)).flat();
+            const yearFiltered = filter(yearAll);
+            if (q && !yearFiltered.length) return null;
+
+            return (
+              <div key={year} style={{ marginBottom: '0.75rem' }}>
+                {/* Year row */}
+                <div onClick={() => toggle('years', year)} style={{
+                  display: 'flex', alignItems: 'center', gap: '0.6rem',
+                  padding: '0.55rem 0.85rem',
+                  background: 'linear-gradient(90deg,rgba(0,80,0,0.2) 0%,rgba(0,40,0,0.1) 100%)',
+                  border: `1px solid ${C.greenBdr || C.border}`, borderRadius: '0.5rem',
+                  cursor: 'pointer', userSelect: 'none',
+                }}>
+                  {expanded.years[year] ? <ChevronDown size={14} color={C.green} /> : <ChevronRight size={14} color={C.green} />}
+                  <Calendar size={14} color={C.gold} />
+                  <span style={{ fontFamily: "'Orbitron', monospace", fontWeight: 700, fontSize: '0.8rem', color: C.gold, letterSpacing: '0.08em' }}>
+                    {year}
+                  </span>
+                  <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.55rem', color: '#336633', marginLeft: 'auto' }}>
+                    {yearFiltered.length} case{yearFiltered.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+
+                {expanded.years[year] && (
+                  <div style={{ marginLeft: '1.5rem', marginTop: '0.25rem' }}>
+                    {Object.keys(grouped[year]).sort((a, b) => b - a).map(month => {
+                      const monthAll      = Object.values(grouped[year][month]).flat();
+                      const monthFiltered = filter(monthAll);
+                      if (q && !monthFiltered.length) return null;
+                      const mKey = `${year}-${month}`;
+
+                      return (
+                        <div key={month} style={{ marginBottom: '0.35rem' }}>
+                          {/* Month row */}
+                          <div onClick={() => toggle('months', mKey)} style={{
+                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                            padding: '0.4rem 0.7rem',
+                            background: 'rgba(0,60,0,0.12)', border: `1px solid ${C.border}`,
+                            borderRadius: '0.375rem', cursor: 'pointer', userSelect: 'none',
+                          }}>
+                            {expanded.months[mKey] ? <ChevronDown size={12} color="#336633" /> : <ChevronRight size={12} color="#336633" />}
+                            <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.65rem', color: C.green, fontWeight: 600 }}>
+                              {MONTHS[+month]}
+                            </span>
+                            <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.5rem', color: '#336633', marginLeft: 'auto' }}>
+                              {monthFiltered.length} case{monthFiltered.length !== 1 ? 's' : ''}
+                            </span>
+                          </div>
+
+                          {expanded.months[mKey] && (
+                            <div style={{ marginLeft: '1rem', marginTop: '0.2rem' }}>
+                              {Object.keys(grouped[year][month]).sort((a, b) => b - a).map(day => {
+                                const dayCases = filter(grouped[year][month][day]);
+                                if (!dayCases.length) return null;
+                                const dKey = `${year}-${month}-${day}`;
+
+                                return (
+                                  <div key={day} style={{ marginBottom: '0.2rem' }}>
+                                    {/* Day row */}
+                                    <div onClick={() => toggle('days', dKey)} style={{
+                                      display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                      padding: '0.25rem 0.5rem', cursor: 'pointer', userSelect: 'none',
+                                    }}>
+                                      {expanded.days[dKey] === false
+                                        ? <ChevronRight size={10} color="#224422" />
+                                        : <ChevronDown size={10} color="#224422" />}
+                                      <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.6rem', color: '#336633' }}>
+                                        {year}-{month}-{day}
+                                      </span>
+                                      <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.5rem', color: '#1a3320' }}>
+                                        ({dayCases.length})
+                                      </span>
+                                    </div>
+
+                                    {expanded.days[dKey] !== false && (
+                                      <div style={{ marginLeft: '0.75rem' }}>
+                                        {dayCases.map(c => (
+                                          <CaseCard
+                                            key={c.id}
+                                            c={c}
+                                            isFav={isFav(c.id)}
+                                            onFav={() => toggleFav(c)}
+                                            onReport={() => navigate(`/report?id=${encodeURIComponent(c.id)}`)}
+                                            onLive={() => navigate(`/live?id=${encodeURIComponent(c.id)}`)}
+                                          />
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {cases.length === 0 && (
+            <EmptyState icon={<Archive size={32} color="#1a3320" />} text="NO CASES YET — SUBMIT A URL TO BEGIN" />
+          )}
+          {cases.length > 0 && q && !filter(cases).length && (
+            <EmptyState icon={<Search size={32} color="#1a3320" />} text={`NO CASES MATCHING "${search.toUpperCase()}"`} />
+          )}
+        </div>
+      )}
+
+      {/* Favourites */}
+      {tab === 'favs' && (
+        <div>
+          {favList.length === 0 ? (
+            <EmptyState
+              icon={<Star size={36} color="#1a3320" />}
+              text="NO FAVOURITES YET"
+              sub="Star a case to pin it here for quick access"
+            />
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              {favList.map(fav => {
+                const live = cases.find(x => x.id === fav.id) || fav;
+                return (
+                  <CaseCard
+                    key={fav.id}
+                    c={live}
+                    isFav
+                    onFav={() => toggleFav(fav)}
+                    onReport={() => navigate(`/report?id=${encodeURIComponent(fav.id)}`)}
+                    onLive={() => navigate(`/live?id=${encodeURIComponent(fav.id)}`)}
+                    showDate
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
+
+function CaseCard({ c, isFav, onFav, onReport, onLive, showDate }) {
+  const slug    = caseSlug(c.id);
+  const verdict = c.verdict;
+  const color   = VERDICT_COLOR[verdict] || '#aaccaa';
+  const icon    = VERDICT_ICON[verdict] || null;
+
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: '0.5rem',
+        padding: '0.42rem 0.7rem',
+        background: 'rgba(0,20,0,0.5)', border: `1px solid ${C.border}`,
+        borderRadius: '0.375rem', marginBottom: '0.18rem',
+        transition: 'border-color 0.1s',
+      }}
+      onMouseOver={e => e.currentTarget.style.borderColor = C.green}
+      onMouseOut={e  => e.currentTarget.style.borderColor = C.border}
+    >
+      <FolderOpen size={13} color={C.gold} style={{ flexShrink: 0 }} />
+
+      {/* Case name */}
+      <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.7rem', color: C.green, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {slug}
+        {showDate && (
+          <span style={{ color: '#336633', marginLeft: '0.5rem', fontSize: '0.55rem' }}>
+            {c.id.match(/^(\d{4}-\d{2}-\d{2})/)?.[1]}
+          </span>
+        )}
+      </span>
+
+      {/* Domain */}
+      <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.58rem', color: '#336633', flexShrink: 0 }}>
+        {c.domain}
+      </span>
+
+      {/* Status pill */}
+      <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.52rem', color: c.status === 'done' ? '#44cc44' : c.status === 'error' ? '#ff4444' : '#cccc44', flexShrink: 0 }}>
+        {c.status}
+      </span>
+
+      {/* Verdict */}
+      {verdict && (
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontFamily: "'Share Tech Mono', monospace", fontSize: '0.58rem', color, fontWeight: 700, flexShrink: 0 }}>
+          {icon}{verdict.replace(/_/g, ' ')}
+        </span>
+      )}
+
+      {/* Confidence */}
+      {c.confidence != null && (
+        <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.52rem', color: '#336633', flexShrink: 0 }}>
+          {c.confidence}%
+        </span>
+      )}
+
+      {/* C2 count */}
+      {c.c2_count > 0 && (
+        <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.52rem', color: '#ff4444', flexShrink: 0 }}>
+          C2:{c.c2_count}
+        </span>
+      )}
+
+      {/* Action buttons */}
+      <button onClick={onReport} style={actionBtn(C.cyan)}>REPORT</button>
+      <button onClick={onLive} style={actionBtn('#aaccaa')}>LIVE</button>
+
+      {/* Favourite */}
+      <button onClick={onFav} title={isFav ? 'Remove from favourites' : 'Add to favourites'}
+        style={{ padding: '0.2rem 0.3rem', background: isFav ? `${C.gold}1a` : 'transparent', border: '1px solid transparent', borderRadius: '0.2rem', cursor: 'pointer', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+        <Star size={12} fill={isFav ? C.gold : 'none'} color={C.gold} />
+      </button>
+    </div>
+  );
+}
+
+function EmptyState({ icon, text, sub }) {
+  return (
+    <div style={{ textAlign: 'center', padding: '4rem 0' }}>
+      <div style={{ marginBottom: '1rem' }}>{icon}</div>
+      <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.65rem', color: '#224422' }}>{text}</div>
+      {sub && <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: '0.55rem', color: '#1a3320', marginTop: '0.4rem' }}>{sub}</div>}
+    </div>
+  );
+}
+
+const actionBtn = (color) => ({
+  padding: '0.18rem 0.45rem', background: 'transparent', border: `1px solid ${color}33`,
+  borderRadius: '0.2rem', color, cursor: 'pointer',
+  fontFamily: "'Share Tech Mono', monospace", fontSize: '0.58rem', flexShrink: 0,
+});
